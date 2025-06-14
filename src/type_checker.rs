@@ -312,12 +312,10 @@ impl<'src> TypeChecker<'src> {
                 }
                 None => match self.get_return_context() {
                     TypeKind::Void => Ok(CheckedStatement::Return { expression: None }),
-                    expected => {
-                        Err(Diagnostic {
-                            message: format!("expected return value of `{}`", expected),
-                            span: statement.span,
-                        })
-                    }
+                    expected => Err(Diagnostic {
+                        message: format!("expected return value of `{}`", expected),
+                        span: statement.span,
+                    }),
                 },
             },
             StatementKind::Parameter { .. } => {
@@ -341,6 +339,7 @@ impl<'src> TypeChecker<'src> {
         let mut param_types: Vec<TypeKind> = Vec::new();
         for parameter in parameters {
             if let StatementKind::Parameter {
+                mut_keyword,
                 type_token,
                 name_token,
             } = parameter.kind
@@ -350,7 +349,7 @@ impl<'src> TypeChecker<'src> {
                     ScopedIdentifier::Variable {
                         name: name_token.text.clone(),
                         type_kind,
-                        mutable: false, //TODO mut params
+                        mutable: mut_keyword.is_some(),
                     },
                     parameter.span,
                 )?;
@@ -385,7 +384,7 @@ impl<'src> TypeChecker<'src> {
             return Err(Diagnostic {
                 message: "not all branches return".to_string(),
                 span: name_token.span,
-            })
+            });
         }
 
         Ok(CheckedStatement::FunctionDefinition {
@@ -409,7 +408,7 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::FunctionDefinition { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
-            CheckedStatement::While { condition: _condition, body } => false, //TODO technically if condition is always true and body returns, this is true
+            CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
             CheckedStatement::Return { .. } => true,
         }
     }

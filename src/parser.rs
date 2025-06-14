@@ -12,6 +12,7 @@ pub enum StatementKind {
         body: Box<Statement>,
     },
     Parameter {
+        mut_keyword: Option<Token>,
         type_token: Token,
         name_token: Token,
     },
@@ -441,12 +442,18 @@ impl<'src> Parser<'src> {
 
     fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
         //For now only parse simple types and names, in future allow complex types and `mut`
+        let mut_keyword = if let TokenKind::MutKeyword = &self.peek()?.kind {
+            Some(self.expect(TokenKind::MutKeyword)?)
+        } else {
+            None
+        };
         let type_token = self.expect_identifier()?;
         let name_token = self.expect_identifier()?;
 
         Ok(Statement {
             span: Span::from_to(type_token.span, name_token.span),
             kind: StatementKind::Parameter {
+                mut_keyword,
                 type_token,
                 name_token,
             },

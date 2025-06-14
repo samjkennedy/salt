@@ -22,6 +22,7 @@ pub enum TokenKind {
     FalseKeyword,
     WhileKeyword,
     ReturnKeyword,
+    MutKeyword,
     EOF,
 }
 
@@ -197,6 +198,11 @@ impl<'src> Lexer<'src> {
             },
             "return" => Token {
                 kind: TokenKind::ReturnKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "mut" => Token {
+                kind: TokenKind::MutKeyword,
                 span,
                 text: value.to_owned(),
             },
