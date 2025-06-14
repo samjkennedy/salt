@@ -17,9 +17,12 @@ pub enum TokenKind {
     OpenAngle,
     CloseAngle,
     Semicolon,
+    Comma,
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
+    ReturnKeyword,
+    MutKeyword,
     EOF,
 }
 
@@ -42,6 +45,7 @@ impl Span {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    pub text: String,
 }
 
 pub struct Lexer<'src> {
@@ -59,19 +63,20 @@ impl<'src> Lexer<'src> {
 
         if let Some(c) = self.peek() {
             return match c {
-                '+' => Ok(self.make_token(TokenKind::Plus, 1)),
-                '-' => Ok(self.make_token(TokenKind::Minus, 1)),
-                '*' => Ok(self.make_token(TokenKind::Star, 1)),
-                '/' => Ok(self.make_token(TokenKind::Slash, 1)),
-                '%' => Ok(self.make_token(TokenKind::Percent, 1)),
-                '=' => Ok(self.make_token(TokenKind::Equals, 1)),
-                '(' => Ok(self.make_token(TokenKind::OpenParen, 1)),
-                ')' => Ok(self.make_token(TokenKind::CloseParen, 1)),
-                '{' => Ok(self.make_token(TokenKind::OpenCurly, 1)),
-                '}' => Ok(self.make_token(TokenKind::CloseCurly, 1)),
-                '<' => Ok(self.make_token(TokenKind::OpenAngle, 1)),
-                '>' => Ok(self.make_token(TokenKind::CloseAngle, 1)),
-                ';' => Ok(self.make_token(TokenKind::Semicolon, 1)),
+                '+' => Ok(self.make_token(TokenKind::Plus, "+".to_owned())),
+                '-' => Ok(self.make_token(TokenKind::Minus, "-".to_owned())),
+                '*' => Ok(self.make_token(TokenKind::Star, "*".to_owned())),
+                '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
+                '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
+                '=' => Ok(self.make_token(TokenKind::Equals, "=".to_owned())),
+                '(' => Ok(self.make_token(TokenKind::OpenParen, "(".to_owned())),
+                ')' => Ok(self.make_token(TokenKind::CloseParen, ")".to_owned())),
+                '{' => Ok(self.make_token(TokenKind::OpenCurly, "{".to_owned())),
+                '}' => Ok(self.make_token(TokenKind::CloseCurly, "}".to_owned())),
+                '<' => Ok(self.make_token(TokenKind::OpenAngle, "<".to_owned())),
+                '>' => Ok(self.make_token(TokenKind::CloseAngle, ">".to_owned())),
+                ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
+                ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
                 '0'..='9' => Ok(self.lex_number()),
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
@@ -93,6 +98,7 @@ impl<'src> Lexer<'src> {
                 start: self.cursor,
                 length: 0,
             },
+            text: String::new(),
         })
     }
 
@@ -119,17 +125,17 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    fn make_token(&mut self, kind: TokenKind, len: usize) -> Token {
+    fn make_token(&mut self, kind: TokenKind, text: String) -> Token {
+        let len = text.len();
         let token = Token {
             kind,
             span: Span {
                 start: self.cursor,
                 length: len,
             },
+            text,
         };
-
         self.cursor += len;
-
         token
     }
 
@@ -153,6 +159,7 @@ impl<'src> Lexer<'src> {
                 start,
                 length: number.len(),
             },
+            text: number.to_owned(),
         }
     }
 
@@ -177,18 +184,32 @@ impl<'src> Lexer<'src> {
             "true" => Token {
                 kind: TokenKind::TrueKeyword,
                 span,
+                text: value.to_owned(),
             },
             "false" => Token {
                 kind: TokenKind::FalseKeyword,
                 span,
+                text: value.to_owned(),
             },
             "while" => Token {
                 kind: TokenKind::WhileKeyword,
                 span,
+                text: value.to_owned(),
             },
-            &_ => Token {
+            "return" => Token {
+                kind: TokenKind::ReturnKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "mut" => Token {
+                kind: TokenKind::MutKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            _ => Token {
                 kind: TokenKind::Identifier(value.to_string()),
                 span,
+                text: value.to_owned(),
             },
         }
     }

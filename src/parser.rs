@@ -8,7 +8,13 @@ pub enum StatementKind {
     FunctionDefinition {
         return_type: Token, //TODO could be a whole expression i.e. *int[]
         name: Token,
+        parameters: Vec<Statement>,
         body: Box<Statement>,
+    },
+    Parameter {
+        mut_keyword: Option<Token>,
+        type_token: Token,
+        name_token: Token,
     },
     VariableDeclaration {
         type_name: Token, //TODO could be a whole expression i.e. *int[]
@@ -20,6 +26,9 @@ pub enum StatementKind {
     While {
         condition: Expression,
         body: Box<Statement>,
+    },
+    Return {
+        expression: Option<Expression>,
     },
 }
 
@@ -128,7 +137,16 @@ impl<'src> Parser<'src> {
                 let name = self.expect_identifier()?;
 
                 self.expect(TokenKind::OpenParen)?;
-                //TODO: args
+
+                let mut parameters: Vec<Statement> = Vec::new();
+                while self.peek()?.kind != TokenKind::CloseParen {
+                    parameters.push(self.parse_parameter()?);
+
+                    if self.peek()?.kind != TokenKind::CloseParen {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                }
+
                 self.expect(TokenKind::CloseParen)?;
 
                 self.context = ParseContext::Function;
@@ -140,6 +158,7 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::FunctionDefinition {
                         return_type,
                         name,
+                        parameters,
                         body: Box::new(body),
                     },
                 })
@@ -199,6 +218,27 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::While {
                         condition,
                         body: Box::new(body),
+                    },
+                })
+            }
+            TokenKind::ReturnKeyword => {
+                let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
+
+                if self.peek()?.kind == TokenKind::Semicolon {
+                    let semicolon = self.expect(TokenKind::Semicolon)?;
+                    return Ok(Statement {
+                        span: Span::from_to(return_keyword.span, semicolon.span),
+                        kind: StatementKind::Return { expression: None },
+                    });
+                }
+
+                let expr = self.parse_expression()?;
+                let semicolon = self.expect(TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(return_keyword.span, semicolon.span),
+                    kind: StatementKind::Return {
+                        expression: Some(expr),
                     },
                 })
             }
@@ -313,12 +353,10 @@ impl<'src> Parser<'src> {
 
                 self.parse_function_call(identifier)
             }
-            _ => {
-                Err(Diagnostic {
-                    message: format!("parsing {:?} is not yet implemented", token.kind),
-                    span: token.span,
-                })
-            },
+            _ => Err(Diagnostic {
+                message: format!("parsing {:?} is not yet implemented", token.kind),
+                span: token.span,
+            }),
         }
     }
 
@@ -329,7 +367,10 @@ impl<'src> Parser<'src> {
         while self.peek()?.kind != TokenKind::CloseParen {
             let arg = self.parse_expression()?;
             arguments.push(arg);
-            //TODO commas
+
+            if self.peek()?.kind != TokenKind::CloseParen {
+                self.expect(TokenKind::Comma)?;
+            }
         }
 
         let close_paren = self.expect(TokenKind::CloseParen)?;
@@ -396,6 +437,26 @@ impl<'src> Parser<'src> {
         Err(Diagnostic {
             message: format!("expected identifier, but got {:?}", token.kind),
             span: token.span,
+        })
+    }
+
+    fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
+        //For now only parse simple types and names, in future allow complex types and `mut`
+        let mut_keyword = if let TokenKind::MutKeyword = &self.peek()?.kind {
+            Some(self.expect(TokenKind::MutKeyword)?)
+        } else {
+            None
+        };
+        let type_token = self.expect_identifier()?;
+        let name_token = self.expect_identifier()?;
+
+        Ok(Statement {
+            span: Span::from_to(type_token.span, name_token.span),
+            kind: StatementKind::Parameter {
+                mut_keyword,
+                type_token,
+                name_token,
+            },
         })
     }
 }
