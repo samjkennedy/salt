@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::lexer::{Span, Token, TokenKind};
+use crate::lexer::{Span, Token};
 use crate::parser::{BinaryOp, Expression, ExpressionKind, Parser, Statement, StatementKind};
 use std::fmt::{Display, Formatter};
 
@@ -25,6 +25,9 @@ pub enum CheckedStatement {
     While {
         condition: CheckedExpression,
         body: Box<CheckedStatement>,
+    },
+    Return {
+        expression: Option<CheckedExpression>,
     },
 }
 
@@ -136,16 +139,18 @@ enum ScopedIdentifier {
 
 struct Scope {
     identifiers: Vec<ScopedIdentifier>,
+    return_context: TypeKind,
 }
 
 impl Scope {
-    fn new() -> Scope {
+    fn new(return_context: TypeKind) -> Scope {
         Scope {
             identifiers: vec![ScopedIdentifier::Function {
                 return_type: TypeKind::Void,
                 name: "print".to_string(),
                 param_types: vec![TypeKind::I64], //TODO: varargs
             }],
+            return_context,
         }
     }
 
@@ -195,7 +200,7 @@ impl<'src> TypeChecker<'src> {
     pub fn new(parser: &'src mut Parser<'src>) -> TypeChecker<'src> {
         TypeChecker {
             parser,
-            scope: vec![Scope::new()],
+            scope: vec![Scope::new(TypeKind::Void)],
         }
     }
 
@@ -229,6 +234,13 @@ impl<'src> TypeChecker<'src> {
             .try_declare_identifier(identifier, span)
     }
 
+    fn get_return_context(&self) -> TypeKind {
+        self.scope
+            .last()
+            .expect("Missing global scope")
+            .return_context
+    }
+
     fn check_statement(&mut self, statement: Statement) -> Result<CheckedStatement, Diagnostic> {
         match statement.kind {
             StatementKind::Expression(expr, _) => {
@@ -238,7 +250,7 @@ impl<'src> TypeChecker<'src> {
             StatementKind::Block(statements) => {
                 let mut checked_statements = Vec::new();
 
-                self.scope.push(Scope::new());
+                self.scope.push(Scope::new(self.get_return_context()));
                 for statement in statements {
                     checked_statements.push(self.check_statement(statement)?);
                 }
@@ -275,6 +287,39 @@ impl<'src> TypeChecker<'src> {
                     body,
                 })
             }
+            StatementKind::Return { expression } => match expression {
+                Some(expr) => {
+                    let expr_span = expr.span;
+                    let checked_expression = self.check_expr(expr)?;
+
+                    match self.get_return_context() {
+                        TypeKind::Void => {
+                            return Err(Diagnostic {
+                                message: "cannot return a value from a void function".to_string(),
+                                span: expr_span,
+                            })
+                        }
+                        return_type => Self::expect_type(
+                            &return_type,
+                            &checked_expression.type_kind,
+                            expr_span,
+                        )?,
+                    }
+
+                    Ok(CheckedStatement::Return {
+                        expression: Some(checked_expression),
+                    })
+                }
+                None => match self.get_return_context() {
+                    TypeKind::Void => Ok(CheckedStatement::Return { expression: None }),
+                    expected => {
+                        return Err(Diagnostic {
+                            message: format!("expected return value of `{}`", expected),
+                            span: statement.span,
+                        })
+                    }
+                },
+            },
             StatementKind::Parameter { .. } => {
                 unreachable!("should be checked by FunctionDefinition")
             }
@@ -288,64 +333,60 @@ impl<'src> TypeChecker<'src> {
         parameters: Vec<Statement>,
         body: Box<Statement>,
     ) -> Result<CheckedStatement, Diagnostic> {
-        if let TokenKind::Identifier(type_identifier) = return_type.kind {
-            if let TokenKind::Identifier(name) = name.kind {
-                let return_type_kind = self.bind_type_kind(type_identifier, return_type.span)?;
+        let type_identifier = return_type.text;
+        let name = name.text;
+        let return_type_kind = self.bind_type_kind(type_identifier, return_type.span)?;
 
-                let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
-                let mut param_types: Vec<TypeKind> = Vec::new();
-                for parameter in parameters {
-                    if let StatementKind::Parameter {
-                        type_token,
-                        name_token,
-                    } = parameter.kind
-                    {
-                        let type_kind = self.bind_type_kind(type_token.text, type_token.span)?;
-                        self.try_declare_identifier(
-                            ScopedIdentifier::Variable {
-                                name: name_token.text.clone(),
-                                type_kind,
-                                mutable: false, //TODO mut params
-                            },
-                            parameter.span,
-                        )?;
+        let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
+        let mut param_types: Vec<TypeKind> = Vec::new();
+        for parameter in parameters {
+            if let StatementKind::Parameter {
+                type_token,
+                name_token,
+            } = parameter.kind
+            {
+                let type_kind = self.bind_type_kind(type_token.text, type_token.span)?;
+                self.try_declare_identifier(
+                    ScopedIdentifier::Variable {
+                        name: name_token.text.clone(),
+                        type_kind,
+                        mutable: false, //TODO mut params
+                    },
+                    parameter.span,
+                )?;
 
-                        checked_parameters.push(CheckedStatement::Parameter {
-                            type_kind,
-                            name: name_token.text,
-                        });
-                        param_types.push(type_kind);
-                    } else {
-                        unreachable!()
-                    }
-                }
-
-                self.scope
-                    .last_mut()
-                    .expect("missing global scope")
-                    .try_declare_identifier(
-                        ScopedIdentifier::Function {
-                            return_type: return_type_kind,
-                            name: name.clone(),
-                            param_types,
-                        },
-                        return_type.span,
-                    )?;
-
-                let checked_body = self.check_statement(*body)?;
-
-                Ok(CheckedStatement::FunctionDefinition {
-                    return_type: return_type_kind,
-                    name,
-                    parameters: checked_parameters,
-                    body: Box::new(checked_body),
-                })
+                checked_parameters.push(CheckedStatement::Parameter {
+                    type_kind,
+                    name: name_token.text,
+                });
+                param_types.push(type_kind);
             } else {
                 unreachable!()
             }
-        } else {
-            unreachable!()
         }
+
+        self.scope
+            .last_mut()
+            .expect("missing global scope")
+            .try_declare_identifier(
+                ScopedIdentifier::Function {
+                    return_type: return_type_kind,
+                    name: name.clone(),
+                    param_types,
+                },
+                return_type.span,
+            )?;
+
+        self.scope.push(Scope::new(return_type_kind));
+        let checked_body = self.check_statement(*body)?;
+        self.scope.pop();
+
+        Ok(CheckedStatement::FunctionDefinition {
+            return_type: return_type_kind,
+            name,
+            parameters: checked_parameters,
+            body: Box::new(checked_body),
+        })
     }
 
     fn check_variable_declaration(
@@ -431,88 +472,82 @@ impl<'src> TypeChecker<'src> {
                 identifier,
                 arguments,
             } => {
-                if let TokenKind::Identifier(name) = identifier.kind {
-                    match self.get_identifier(&name) {
-                        Some(function) => {
-                            if let ScopedIdentifier::Function {
-                                return_type,
-                                name: func_name,
-                                param_types,
-                            } = function
-                            {
-                                if arguments.len() != param_types.len() {
-                                    return Err(Diagnostic {
+                let name = identifier.text;
+                match self.get_identifier(&name) {
+                    Some(function) => {
+                        if let ScopedIdentifier::Function {
+                            return_type,
+                            name: func_name,
+                            param_types,
+                        } = function
+                        {
+                            if arguments.len() != param_types.len() {
+                                return Err(Diagnostic {
                                         message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, param_types.len(),  arguments.len()),
                                         span: expr.span,
                                     });
-                                }
-
-                                let mut i = 0;
-                                let mut checked_args: Vec<CheckedExpression> = Vec::new();
-
-                                for arg in arguments {
-                                    let arg_span = arg.span;
-                                    let checked_arg = self.check_expr(arg)?;
-
-                                    Self::expect_type(
-                                        &param_types[i],
-                                        &checked_arg.type_kind,
-                                        arg_span,
-                                    )?;
-
-                                    checked_args.push(checked_arg);
-
-                                    i += 1;
-                                }
-
-                                //TODO: validate that args match function params
-
-                                Ok(CheckedExpression {
-                                    kind: CheckedExpressionKind::FunctionCall {
-                                        name: func_name,
-                                        arguments: checked_args,
-                                    },
-                                    type_kind: return_type,
-                                })
-                            } else {
-                                Err(Diagnostic {
-                                    message: format!("cannot call `{}` as a function", name),
-                                    span: expr.span,
-                                })
                             }
+
+                            let mut i = 0;
+                            let mut checked_args: Vec<CheckedExpression> = Vec::new();
+
+                            for arg in arguments {
+                                let arg_span = arg.span;
+                                let checked_arg = self.check_expr(arg)?;
+
+                                Self::expect_type(
+                                    &param_types[i],
+                                    &checked_arg.type_kind,
+                                    arg_span,
+                                )?;
+
+                                checked_args.push(checked_arg);
+
+                                i += 1;
+                            }
+
+                            //TODO: validate that args match function params
+
+                            Ok(CheckedExpression {
+                                kind: CheckedExpressionKind::FunctionCall {
+                                    name: func_name,
+                                    arguments: checked_args,
+                                },
+                                type_kind: return_type,
+                            })
+                        } else {
+                            Err(Diagnostic {
+                                message: format!("cannot call `{}` as a function", name),
+                                span: expr.span,
+                            })
                         }
-                        None => Err(Diagnostic {
-                            message: format!("no such function `{}` in scope", name),
-                            span: expr.span,
-                        }),
                     }
-                } else {
-                    unreachable!()
+                    None => Err(Diagnostic {
+                        message: format!("no such function `{}` in scope", name),
+                        span: expr.span,
+                    }),
                 }
             }
             ExpressionKind::Variable(name) => {
-                if let TokenKind::Identifier(name) = name.kind {
-                    match self.get_identifier(&name) {
-                        Some(identifier) => match identifier {
-                            ScopedIdentifier::Variable {
-                                name,
-                                type_kind,
-                                mutable,
-                            } => Ok(CheckedExpression {
-                                kind: CheckedExpressionKind::Variable { name, mutable },
-                                type_kind,
-                            }),
-                            ScopedIdentifier::Function { .. } => {
-                                panic!("function pointers are not yet implemented")
-                            }
-                        },
-                        None => Err(Diagnostic {
-                            message: format!("no such variable `{}` in scope", name),
-                            span: expr.span,
+                let name = name.text;
+                match self.get_identifier(&name) {
+                    Some(identifier) => match identifier {
+                        ScopedIdentifier::Variable {
+                            name,
+                            type_kind,
+                            mutable,
+                        } => Ok(CheckedExpression {
+                            kind: CheckedExpressionKind::Variable { name, mutable },
+                            type_kind,
                         }),
-                    }
-                } else {
-                    unreachable!()
+                        ScopedIdentifier::Function { .. } => {
+                            panic!("function pointers are not yet implemented")
+                        }
+                    },
+                    None => Err(Diagnostic {
+                        message: format!("no such variable `{}` in scope", name),
+                        span: expr.span,
+                    }),
                 }
             }
         }

@@ -21,6 +21,7 @@ pub enum TokenKind {
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
+    ReturnKeyword,
     EOF,
 }
 
@@ -191,6 +192,11 @@ impl<'src> Lexer<'src> {
             },
             "while" => Token {
                 kind: TokenKind::WhileKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "return" => Token {
+                kind: TokenKind::ReturnKeyword,
                 span,
                 text: value.to_owned(),
             },

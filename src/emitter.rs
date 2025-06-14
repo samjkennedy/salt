@@ -92,6 +92,14 @@ impl Emitter {
             CheckedStatement::Parameter { .. } => {
                 unreachable!("should be handled by function definition")
             }
+            CheckedStatement::Return { expression } => {
+                write!(self.output, "return ")?;
+                match expression {
+                    Some(expr) => self.emit_expr(expr)?,
+                    None => {}
+                }
+                write!(self.output, ";\n")
+            }
         }
     }
 

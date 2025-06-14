@@ -11,6 +11,10 @@ pub enum StatementKind {
         parameters: Vec<Statement>,
         body: Box<Statement>,
     },
+    Parameter {
+        type_token: Token,
+        name_token: Token,
+    },
     VariableDeclaration {
         type_name: Token, //TODO could be a whole expression i.e. *int[]
         name: Token,
@@ -22,9 +26,8 @@ pub enum StatementKind {
         condition: Expression,
         body: Box<Statement>,
     },
-    Parameter {
-        type_token: Token,
-        name_token: Token,
+    Return {
+        expression: Option<Expression>,
     },
 }
 
@@ -214,6 +217,27 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::While {
                         condition,
                         body: Box::new(body),
+                    },
+                })
+            }
+            TokenKind::ReturnKeyword => {
+                let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
+
+                if self.peek()?.kind == TokenKind::Semicolon {
+                    let semicolon = self.expect(TokenKind::Semicolon)?;
+                    return Ok(Statement {
+                        span: Span::from_to(return_keyword.span, semicolon.span),
+                        kind: StatementKind::Return { expression: None },
+                    });
+                }
+
+                let expr = self.parse_expression()?;
+                let semicolon = self.expect(TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(return_keyword.span, semicolon.span),
+                    kind: StatementKind::Return {
+                        expression: Some(expr),
                     },
                 })
             }
