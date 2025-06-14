@@ -17,44 +17,44 @@ mod diagnostic;
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).peekable();
 
-    // let input_path = args
-    //     .next()
-    //     .context("Usage: saltc <input>.sl [-o <output>.c] [--keep-c]")?;
-    //
-    // let mut output_c_path: Option<String> = None;
-    // let mut keep_c_file = false;
-    //
-    // while let Some(arg) = args.next() {
-    //     match arg.as_str() {
-    //         "-o" => {
-    //             let out = args
-    //                 .next()
-    //                 .context("Expected output file name after `-o`")?;
-    //             output_c_path = Some(out);
-    //         }
-    //         "--keep-c" => {
-    //             keep_c_file = true;
-    //         }
-    //         other => {
-    //             anyhow::bail!("Unexpected argument: `{}`", other);
-    //         }
-    //     }
-    // }
-    //
-    // // Determine .c output path
-    // let output_c_path = output_c_path.unwrap_or_else(|| {
-    //     let input_path_obj = Path::new(&input_path);
-    //     let stem = input_path_obj
-    //         .file_stem()
-    //         .expect("Input file must have a valid name");
-    //     let mut out_path = input_path_obj.with_file_name(stem);
-    //     out_path.set_extension("c");
-    //     out_path.to_string_lossy().into_owned()
-    // });
+    let input_path = args
+        .next()
+        .context("Usage: saltc <input>.sl [-o <output>.c] [--keep-c]")?;
+    
+    let mut output_c_path: Option<String> = None;
+    let mut keep_c_file = false;
+    
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-o" => {
+                let out = args
+                    .next()
+                    .context("Expected output file name after `-o`")?;
+                output_c_path = Some(out);
+            }
+            "--keep-c" => {
+                keep_c_file = true;
+            }
+            other => {
+                anyhow::bail!("Unexpected argument: `{}`", other);
+            }
+        }
+    }
+    
+    // Determine .c output path
+    let output_c_path = output_c_path.unwrap_or_else(|| {
+        let input_path_obj = Path::new(&input_path);
+        let stem = input_path_obj
+            .file_stem()
+            .expect("Input file must have a valid name");
+        let mut out_path = input_path_obj.with_file_name(stem);
+        out_path.set_extension("c");
+        out_path.to_string_lossy().into_owned()
+    });
 
-    let input_path = "resources/diagnostics.sl".to_owned();
-    let output_c_path = "resources/diagnostics.c";
-    let keep_c_file = true;
+    // let input_path = "resources/diagnostics.sl".to_owned();
+    // let output_c_path = "resources/diagnostics.c";
+    // let keep_c_file = true;
 
     // Step 1: Compile .sl → .c
     let program = fs::read_to_string(&input_path)

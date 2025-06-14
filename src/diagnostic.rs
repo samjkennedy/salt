@@ -6,6 +6,12 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
+const RED: &str = "\x1b[31m";
+const BOLD: &str = "\x1b[1m";
+const RESET: &str = "\x1b[0m";
+const CYAN: &str = "\x1b[36m";
+const BRIGHT_RED: &str = "\x1b[91m";
+
 impl Diagnostic {
 
     pub fn report_with_source(&self, filename: &String, src: &String) {
@@ -28,11 +34,13 @@ impl Diagnostic {
                 let marker_line: String = " ".repeat(offset_in_line) + &"^".repeat(marker_len);
 
                 eprintln!(
-                    "error: {} at {}\n {}|\t{}\n  |\t{}", //TODO correctly account for the width of the line number
-                    self.message, location,
+                    "{}{}error:{} {} {}{}{}\n {}|\t{}\n  |\t{}{}{}",
+                    BOLD, RED, RESET,
+                    self.message,
+                    CYAN, location, RESET,
                     line_index + 1,
                     line,
-                    marker_line
+                    BRIGHT_RED, marker_line, RESET
                 );
                 return;
             }
