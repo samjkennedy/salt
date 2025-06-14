@@ -1,3 +1,4 @@
+use crate::diagnostic::Diagnostic;
 use crate::lexer::{Lexer, Span, Token, TokenKind};
 
 #[derive(Debug, Clone)]
@@ -87,7 +88,7 @@ enum ParseContext {
 }
 
 pub struct Parser<'src> {
-    current: Option<Token>,
+    current: Result<Token, Diagnostic>,
     lexer: &'src mut Lexer<'src>,
     context: ParseContext,
 }
@@ -101,35 +102,40 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub fn parse_statement(&mut self) -> Option<Statement> {
+    pub fn has_next(&self) -> bool {
+        self.lexer.has_next()
+    }
+
+    //TODO: this results in only being able to report 1 diagnostic per function...
+    pub fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
         match self.peek()?.kind {
             TokenKind::OpenCurly => {
-                let open_curly = self.expect(TokenKind::OpenCurly);
+                let open_curly = self.expect(TokenKind::OpenCurly)?;
                 let mut statements = vec![];
 
                 while self.peek()?.kind != TokenKind::CloseCurly {
                     statements.push(self.parse_statement()?);
                 }
-                let close_curly = self.expect(TokenKind::CloseCurly);
+                let close_curly = self.expect(TokenKind::CloseCurly)?;
 
-                Some(Statement {
+                Ok(Statement {
                     span: Span::from_to(open_curly.span, close_curly.span),
                     kind: StatementKind::Block(statements),
                 })
             }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Global => {
-                let return_type = self.expect(TokenKind::Identifier(identifier));
-                let name = self.expect_identifier();
+                let return_type = self.expect(TokenKind::Identifier(identifier))?;
+                let name = self.expect_identifier()?;
 
-                self.expect(TokenKind::OpenParen);
+                self.expect(TokenKind::OpenParen)?;
                 //TODO: args
-                self.expect(TokenKind::CloseParen);
+                self.expect(TokenKind::CloseParen)?;
 
                 self.context = ParseContext::Function;
                 let body = self.parse_statement()?;
                 self.context = ParseContext::Global;
 
-                Some(Statement {
+                Ok(Statement {
                     span: Span::from_to(return_type.span, body.span),
                     kind: StatementKind::FunctionDefinition {
                         return_type,
@@ -140,19 +146,19 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Identifier(type_name) => {
                 // This could be a variable declaration or expression
-                let identifier = self.expect(TokenKind::Identifier(type_name));
+                let identifier = self.expect(TokenKind::Identifier(type_name))?;
 
                 // Peek ahead to see if after the identifier we have another identifier (variable declaration)
                 if let TokenKind::Identifier(var_name) = self.peek()?.kind {
                     // Looks like a var decl to me
-                    let name_token = self.expect(TokenKind::Identifier(var_name.clone()));
+                    let name_token = self.expect(TokenKind::Identifier(var_name.clone()))?;
 
-                    let equals = self.expect(TokenKind::Equals);
+                    let equals = self.expect(TokenKind::Equals)?;
                     let initialiser = self.parse_expression()?;
 
-                    let semicolon = self.expect(TokenKind::Semicolon);
+                    let semicolon = self.expect(TokenKind::Semicolon)?;
 
-                    Some(Statement {
+                    Ok(Statement {
                         span: Span::from_to(identifier.span, semicolon.span),
                         kind: StatementKind::VariableDeclaration {
                             type_name: identifier,
@@ -175,29 +181,32 @@ impl<'src> Parser<'src> {
                         )?
                     };
 
-                    let semicolon = self.expect(TokenKind::Semicolon);
+                    let semicolon = self.expect(TokenKind::Semicolon)?;
 
-                    Some(Statement {
+                    Ok(Statement {
                         span: Span::from_to(expression.span, semicolon.span),
                         kind: StatementKind::Expression(expression, semicolon),
                     })
                 }
             }
             TokenKind::WhileKeyword => {
-                let while_keyword = self.expect(TokenKind::WhileKeyword);
+                let while_keyword = self.expect(TokenKind::WhileKeyword)?;
                 let condition = self.parse_expression()?;
                 let body = self.parse_statement()?;
 
-                Some(Statement {
+                Ok(Statement {
                     span: Span::from_to(while_keyword.span, body.span),
-                    kind: StatementKind::While {condition, body: Box::new(body)},
+                    kind: StatementKind::While {
+                        condition,
+                        body: Box::new(body),
+                    },
                 })
             }
             _ => {
                 let expr = self.parse_expression()?;
-                let semi = self.expect(TokenKind::Semicolon);
+                let semi = self.expect(TokenKind::Semicolon)?;
 
-                Some(Statement {
+                Ok(Statement {
                     span: Span::from_to(expr.span, semi.span),
                     kind: StatementKind::Expression(expr, semi),
                 })
@@ -205,21 +214,24 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_expression(&mut self) -> Option<Expression> {
+    fn parse_expression(&mut self) -> Result<Expression, Diagnostic> {
         self.parse_binary_expression(0)
     }
 
-    fn next(&mut self) -> Option<Token> {
+    fn next(&mut self) -> Result<Token, Diagnostic> {
         let token = self.current.clone();
         self.current = self.lexer.next();
         token
     }
 
-    fn peek(&self) -> Option<Token> {
+    fn peek(&self) -> Result<Token, Diagnostic> {
         self.current.clone()
     }
 
-    fn parse_binary_expression(&mut self, parent_precedence: i64) -> Option<Expression> {
+    fn parse_binary_expression(
+        &mut self,
+        parent_precedence: i64,
+    ) -> Result<Expression, Diagnostic> {
         let left = self.parse_primary_expression()?;
 
         self.parse_binary_expression_right(parent_precedence, left)
@@ -229,19 +241,22 @@ impl<'src> Parser<'src> {
         &mut self,
         parent_precedence: i64,
         mut left: Expression,
-    ) -> Option<Expression> {
-        while let Some(token) = self.peek() {
+    ) -> Result<Expression, Diagnostic> {
+        while let Ok(token) = self.peek() {
             if let Some(op) = Self::get_binary_op(token.kind) {
                 if !left.is_lvalue() && op == BinaryOp::Assign {
-                    panic!("invalid left hand operand {:?}", left.kind);
+                    return Err(Diagnostic {
+                        message: format!("invalid left hand operand {:?}", left.kind),
+                        span: left.span,
+                    });
                 }
 
                 let precedence = Self::get_binary_precedence(op);
                 if precedence <= parent_precedence {
-                    return Some(left);
+                    return Ok(left);
                 }
 
-                self.next(); //consume the operator
+                self.next()?; //consume the operator
 
                 let right = self.parse_binary_expression(precedence)?;
 
@@ -254,43 +269,43 @@ impl<'src> Parser<'src> {
                     },
                 }
             } else {
-                return Some(left);
+                return Ok(left);
             }
         }
 
-        Some(left)
+        Ok(left)
     }
 
-    fn parse_primary_expression(&mut self) -> Option<Expression> {
+    fn parse_primary_expression(&mut self) -> Result<Expression, Diagnostic> {
         let token = self.peek()?;
 
         match token.kind {
             TokenKind::TrueKeyword => {
-                self.next();
-                Some(Expression {
+                self.next()?;
+                Ok(Expression {
                     kind: ExpressionKind::BoolLiteral(true),
                     span: token.span,
                 })
             }
             TokenKind::FalseKeyword => {
-                self.next();
-                Some(Expression {
+                self.next()?;
+                Ok(Expression {
                     kind: ExpressionKind::BoolLiteral(false),
                     span: token.span,
                 })
             }
             TokenKind::IntLiteral(value) => {
-                self.next();
-                Some(Expression {
+                self.next()?;
+                Ok(Expression {
                     kind: ExpressionKind::IntLiteral(value),
                     span: token.span,
                 })
             }
             TokenKind::OpenParen => self.parse_parenthesised(),
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
-                let identifier = self.expect(TokenKind::Identifier(identifier));
+                let identifier = self.expect(TokenKind::Identifier(identifier))?;
                 if self.peek()?.kind != TokenKind::OpenParen {
-                    return Some(Expression {
+                    return Ok(Expression {
                         span: identifier.span,
                         kind: ExpressionKind::Variable(identifier),
                     });
@@ -298,12 +313,17 @@ impl<'src> Parser<'src> {
 
                 self.parse_function_call(identifier)
             }
-            _ => todo!("parsing {:?} is not yet implemented", token.kind),
+            _ => {
+                Err(Diagnostic {
+                    message: format!("parsing {:?} is not yet implemented", token.kind),
+                    span: token.span,
+                })
+            },
         }
     }
 
-    fn parse_function_call(&mut self, identifier: Token) -> Option<Expression> {
-        let _open_paren = self.expect(TokenKind::OpenParen);
+    fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
+        let _open_paren = self.expect(TokenKind::OpenParen)?;
 
         let mut arguments = vec![];
         while self.peek()?.kind != TokenKind::CloseParen {
@@ -312,9 +332,9 @@ impl<'src> Parser<'src> {
             //TODO commas
         }
 
-        let close_paren = self.expect(TokenKind::CloseParen);
+        let close_paren = self.expect(TokenKind::CloseParen)?;
 
-        Some(Expression {
+        Ok(Expression {
             span: Span::from_to(identifier.span, close_paren.span),
             kind: ExpressionKind::FunctionCall {
                 identifier,
@@ -323,12 +343,12 @@ impl<'src> Parser<'src> {
         })
     }
 
-    fn parse_parenthesised(&mut self) -> Option<Expression> {
-        let open_paren = self.expect(TokenKind::OpenParen);
+    fn parse_parenthesised(&mut self) -> Result<Expression, Diagnostic> {
+        let open_paren = self.expect(TokenKind::OpenParen)?;
         let expr = self.parse_expression()?;
-        let close_paren = self.expect(TokenKind::CloseParen);
+        let close_paren = self.expect(TokenKind::CloseParen)?;
 
-        Some(Expression {
+        Ok(Expression {
             span: Span::from_to(open_paren.span, close_paren.span),
             kind: ExpressionKind::Parenthesized(Box::new(expr)),
         })
@@ -357,27 +377,25 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn expect(&mut self, expected: TokenKind) -> Token {
-        match self.next() {
-            Some(token) => {
-                if token.kind == expected {
-                    return token;
-                }
-                panic!("Expected {:?}, got {:?}", expected, token.kind)
-            }
-            None => panic!("expected {:?} but not found", expected),
+    fn expect(&mut self, expected: TokenKind) -> Result<Token, Diagnostic> {
+        let token = self.next()?;
+        if token.kind == expected {
+            return Ok(token);
         }
+        Err(Diagnostic {
+            message: format!("expected {:?} but got {:?}", expected, token.kind),
+            span: token.span,
+        })
     }
 
-    fn expect_identifier(&mut self) -> Token {
-        match self.next() {
-            Some(token) => {
-                if let TokenKind::Identifier(_) = &token.kind {
-                    return token;
-                }
-                panic!("Expected identifier, got {:?}", token.kind)
-            }
-            None => panic!("expected identifier but not found"),
+    fn expect_identifier(&mut self) -> Result<Token, Diagnostic> {
+        let token = self.next()?;
+        if let TokenKind::Identifier(_) = &token.kind {
+            return Ok(token);
         }
+        Err(Diagnostic {
+            message: format!("expected identifier, but got {:?}", token.kind),
+            span: token.span,
+        })
     }
 }
