@@ -1,6 +1,8 @@
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Span, Token};
-use crate::parser::{BinaryOp, Expression, ExpressionKind, Parser, Statement, StatementKind};
+use crate::parser::{
+    BinaryOp, Expression, ExpressionKind, Parser, Statement, StatementKind, TypeExpression,
+};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -270,11 +272,11 @@ impl<'src> TypeChecker<'src> {
                 body,
             } => self.check_function_definition(return_type, name, parameters, body),
             StatementKind::VariableDeclaration {
-                type_name: type_token,
-                name: name_token,
+                type_expression,
+                identifier,
                 initialiser,
                 ..
-            } => self.check_variable_declaration(type_token, name_token, initialiser),
+            } => self.check_variable_declaration(type_expression, identifier, initialiser),
             StatementKind::While { condition, body } => {
                 let condition_span = condition.span;
                 let checked_condition = self.check_expr(condition)?;
@@ -359,25 +361,25 @@ impl<'src> TypeChecker<'src> {
 
     fn check_function_definition(
         &mut self,
-        return_type: Token,
+        return_type: TypeExpression,
         name_token: Token,
         parameters: Vec<Statement>,
         body: Box<Statement>,
     ) -> Result<CheckedStatement, Diagnostic> {
-        let type_identifier = return_type.text;
         let name = name_token.text;
-        let return_type_kind = self.bind_type_kind(type_identifier, return_type.span)?;
+        let return_type_span = return_type.span();
+        let return_type_kind = self.bind_type_kind(return_type)?;
 
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
         let mut param_types: Vec<TypeKind> = Vec::new();
         for parameter in parameters {
             if let StatementKind::Parameter {
-                mut_keyword,
-                type_token,
                 name_token,
+                mut_keyword,
+                type_expression,
             } = parameter.kind
             {
-                let type_kind = self.bind_type_kind(type_token.text, type_token.span)?;
+                let type_kind = self.bind_type_kind(type_expression)?;
                 self.try_declare_identifier(
                     ScopedIdentifier::Variable {
                         name: name_token.text.clone(),
@@ -406,7 +408,7 @@ impl<'src> TypeChecker<'src> {
                     name: name.clone(),
                     param_types,
                 },
-                return_type.span,
+                return_type_span,
             )?;
 
         self.scope.push(Scope::new(return_type_kind));
@@ -460,11 +462,11 @@ impl<'src> TypeChecker<'src> {
 
     fn check_variable_declaration(
         &mut self,
-        type_token: Token,
+        type_expression: TypeExpression,
         name_token: Token,
         initialiser: Expression,
     ) -> Result<CheckedStatement, Diagnostic> {
-        let type_kind = self.bind_type_kind(type_token.text, type_token.span)?;
+        let type_kind = self.bind_type_kind(type_expression)?;
         let variable_name = name_token.text;
 
         self.scope
@@ -720,16 +722,19 @@ impl<'src> TypeChecker<'src> {
         Ok(())
     }
 
-    fn bind_type_kind(&self, type_name: String, span: Span) -> Result<TypeKind, Diagnostic> {
-        match type_name.as_str() {
-            "void" => Ok(TypeKind::Void),
-            "bool" => Ok(TypeKind::Bool),
-            "i64" => Ok(TypeKind::I64),
-            "f32" => Ok(TypeKind::F32),
-            _ => Err(Diagnostic {
-                message: format!("no such type {} in scope", type_name),
-                span,
-            }),
+    fn bind_type_kind(&self, type_expression: TypeExpression) -> Result<TypeKind, Diagnostic> {
+        let type_expression_span = type_expression.span();
+        match type_expression {
+            TypeExpression::Simple(token) => match token.text.as_str() {
+                "void" => Ok(TypeKind::Void),
+                "bool" => Ok(TypeKind::Bool),
+                "i64" => Ok(TypeKind::I64),
+                "f32" => Ok(TypeKind::F32),
+                _ => Err(Diagnostic {
+                    message: format!("no such type {} in scope", token.text),
+                    span: type_expression_span,
+                }),
+            },
         }
     }
 }

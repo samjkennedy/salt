@@ -7,7 +7,7 @@ i64 choice_return(i64 i) {
     return 2;
 }
 
-void main() {
+main(): void {
     i64 x = 10;
 
     print(choice_return(x));

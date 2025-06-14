@@ -1,4 +1,4 @@
-i64 sum(i64 a, i64 b) {
+sum(a: i64, b: i64): i64 {
     return a + b;
 }
 

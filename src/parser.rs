@@ -6,19 +6,19 @@ pub enum StatementKind {
     Expression(Expression),
     Block(Vec<Statement>),
     FunctionDefinition {
-        return_type: Token, //TODO could be a whole expression i.e. *int[]
+        return_type: TypeExpression,
         name: Token,
         parameters: Vec<Statement>,
         body: Box<Statement>,
     },
     Parameter {
-        mut_keyword: Option<Token>,
-        type_token: Token,
         name_token: Token,
+        mut_keyword: Option<Token>,
+        type_expression: TypeExpression,
     },
     VariableDeclaration {
-        type_name: Token, //TODO could be a whole expression i.e. *int[]
-        name: Token,
+        identifier: Token,
+        type_expression: TypeExpression,
         initialiser: Expression,
     },
     While {
@@ -74,6 +74,21 @@ pub enum ExpressionKind {
 pub struct Expression {
     pub kind: ExpressionKind,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeExpression {
+    Simple(Token), //i64, bool, Struct etc
+                   // Array(Box<TypeExpression>, i64), //i64[5], bool[8][8], etc
+                   //Slice(Box<TypeExpression>)
+}
+
+impl TypeExpression {
+    pub fn span(&self) -> Span {
+        match self {
+            TypeExpression::Simple(token) => token.span,
+        }
+    }
 }
 
 impl Expression {
@@ -135,8 +150,8 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Block(statements),
                 })
             }
-            TokenKind::Identifier(identifier) if self.context == ParseContext::Global => {
-                let return_type = self.expect(TokenKind::Identifier(identifier))?;
+
+            TokenKind::Identifier(_) if self.context == ParseContext::Global => {
                 let name = self.expect_identifier()?;
 
                 self.expect(TokenKind::OpenParen)?;
@@ -152,12 +167,16 @@ impl<'src> Parser<'src> {
 
                 self.expect(TokenKind::CloseParen)?;
 
+                //TODO: allow pure void functions to omit the type
+                self.expect(TokenKind::Colon)?;
+                let return_type = self.parse_type_expression()?;
+
                 self.context = ParseContext::Function;
                 let body = self.parse_statement()?;
                 self.context = ParseContext::Global;
 
                 Ok(Statement {
-                    span: Span::from_to(return_type.span, body.span),
+                    span: Span::from_to(return_type.span(), body.span),
                     kind: StatementKind::FunctionDefinition {
                         return_type,
                         name,
@@ -166,15 +185,18 @@ impl<'src> Parser<'src> {
                     },
                 })
             }
-            TokenKind::Identifier(type_name) => {
+            TokenKind::Identifier(identifier) => {
+                let identifier = self.expect(TokenKind::Identifier(identifier))?;
                 // This could be a variable declaration or expression
-                let identifier = self.expect(TokenKind::Identifier(type_name))?;
-
-                // Peek ahead to see if after the identifier we have another identifier (variable declaration)
-                if let TokenKind::Identifier(var_name) = self.peek().kind {
+                // Peek ahead to see if after the identifier we have a colon (variable declaration)
+                if let TokenKind::Colon = self.peek().kind {
                     // Looks like a var decl to me
-                    let name_token = self.expect(TokenKind::Identifier(var_name.clone()))?;
 
+                    //TODO: allow type inference
+                    self.expect(TokenKind::Colon)?;
+                    let type_expression = self.parse_type_expression()?;
+
+                    //TODO: decide how to handle RAII
                     self.expect(TokenKind::Equals)?;
                     let initialiser = self.parse_expression()?;
 
@@ -183,8 +205,8 @@ impl<'src> Parser<'src> {
                     Ok(Statement {
                         span: Span::from_to(identifier.span, semicolon.span),
                         kind: StatementKind::VariableDeclaration {
-                            type_name: identifier,
-                            name: name_token,
+                            identifier,
+                            type_expression,
                             initialiser,
                         },
                     })
@@ -282,6 +304,29 @@ impl<'src> Parser<'src> {
                 })
             }
         }
+    }
+
+    fn parse_type_expression(&mut self) -> Result<TypeExpression, Diagnostic> {
+        if let TokenKind::Identifier(identifier) = self.peek().kind {
+            let identifier = self.expect(TokenKind::Identifier(identifier))?;
+
+            return match self.peek().kind {
+                TokenKind::OpenSquare => Err(Diagnostic {
+                    message: "arrays are not yet implemented".to_string(),
+                    span: self.peek().span,
+                }),
+                TokenKind::Star => Err(Diagnostic {
+                    message: "pointers are not yet implemented".to_string(),
+                    span: self.peek().span,
+                }),
+                _ => Ok(TypeExpression::Simple(identifier)),
+            };
+        }
+
+        Err(Diagnostic {
+            message: format!("expected identifier but got {:?}", self.peek().kind),
+            span: self.peek().span,
+        })
     }
 
     fn parse_expression(&mut self) -> Result<Expression, Diagnostic> {
@@ -474,21 +519,23 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
-        //For now only parse simple types and names, in future allow complex types and `mut`
+        let name_token = self.expect_identifier()?;
+
+        self.expect(TokenKind::Colon)?;
+
         let mut_keyword = if let TokenKind::MutKeyword = &self.peek().kind {
             Some(self.expect(TokenKind::MutKeyword)?)
         } else {
             None
         };
-        let type_token = self.expect_identifier()?;
-        let name_token = self.expect_identifier()?;
+        let type_expression = self.parse_type_expression()?;
 
         Ok(Statement {
-            span: Span::from_to(type_token.span, name_token.span),
+            span: Span::from_to(name_token.span, type_expression.span()),
             kind: StatementKind::Parameter {
-                mut_keyword,
-                type_token,
                 name_token,
+                mut_keyword,
+                type_expression,
             },
         })
     }

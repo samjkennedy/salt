@@ -1,3 +1,4 @@
-void main(str[] args) {
-    i32[5] nums = [10, 20, 30, 40, 50];
+main(): void {
+    x: i64 = 10;
+    print(x);
 }
