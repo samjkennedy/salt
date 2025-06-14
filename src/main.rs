@@ -12,7 +12,7 @@ mod lexer;
 mod parser;
 mod type_checker;
 mod emitter;
-
+mod diagnostic;
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).peekable();
@@ -20,10 +20,10 @@ fn main() -> Result<()> {
     let input_path = args
         .next()
         .context("Usage: saltc <input>.sl [-o <output>.c] [--keep-c]")?;
-
+    
     let mut output_c_path: Option<String> = None;
     let mut keep_c_file = false;
-
+    
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" => {
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
             }
         }
     }
-
+    
     // Determine .c output path
     let output_c_path = output_c_path.unwrap_or_else(|| {
         let input_path_obj = Path::new(&input_path);
@@ -52,8 +52,8 @@ fn main() -> Result<()> {
         out_path.to_string_lossy().into_owned()
     });
 
-    // let input_path = "resources/conditions.sl";
-    // let output_c_path = "resources/conditions.c";
+    // let input_path = "resources/diagnostics.sl".to_owned();
+    // let output_c_path = "resources/diagnostics.c";
     // let keep_c_file = true;
 
     // Step 1: Compile .sl → .c
@@ -64,11 +64,28 @@ fn main() -> Result<()> {
     let mut parser = Parser::new(&mut lexer);
     let mut type_checker = TypeChecker::new(&mut parser);
 
+    let mut diagnostics =  Vec::new();
+    let mut statements = Vec::new();
+
+    while type_checker.has_next() {
+        match type_checker.check_next() {
+            Ok(statement) => statements.push(statement),
+            Err(diagnostic) => diagnostics.push(diagnostic),
+        }
+    }
+
+    if !diagnostics.is_empty() {
+        for diagnostic in diagnostics {
+            diagnostic.report_with_source(&input_path, &program);
+        }
+        return Ok(());
+    }
+
     let output_file = File::create(&output_c_path)
         .with_context(|| format!("Failed to write C file `{}`", output_c_path))?;
 
-    let mut emitter = Emitter::new(&mut type_checker, output_file);
-    emitter.emit()?;
+    let mut emitter = Emitter::new(output_file);
+    emitter.emit(&statements)?;
 
     println!("Generated C file: {}", output_c_path);
 

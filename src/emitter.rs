@@ -1,35 +1,31 @@
 use crate::type_checker::{
-    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, TypeChecker,
+    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement,
     TypeKind,
 };
 use std::fs::File;
 use std::io::Error;
 use std::io::Write;
 
-pub struct Emitter<'src> {
-    type_checker: &'src mut TypeChecker<'src>,
+pub struct Emitter {
     output: File,
 }
 
-impl<'src> Emitter<'src> {
-    pub fn new(type_checker: &'src mut TypeChecker<'src>, output: File) -> Self {
-        Emitter {
-            type_checker,
-            output,
-        }
+impl Emitter {
+    pub fn new(output: File) -> Self {
+        Emitter { output }
     }
 
-    pub fn emit(&mut self) -> Result<(), Error> {
+    pub fn emit(&mut self, program: &Vec<CheckedStatement>) -> Result<(), Error> {
         self.emit_preamble()?;
 
-        while let Some(statement) = self.type_checker.check_next() {
+        for statement in program {
             // println!("{:#?}", statement);
             self.emit_statement(statement)?;
         }
         Ok(())
     }
 
-    fn emit_statement(&mut self, statement: CheckedStatement) -> Result<(), Error> {
+    fn emit_statement(&mut self, statement: &CheckedStatement) -> Result<(), Error> {
         match statement {
             CheckedStatement::Expression(expr) => {
                 self.emit_expr(expr)?;
@@ -50,15 +46,15 @@ impl<'src> Emitter<'src> {
                 self.emit_type(return_type)?;
                 write!(self.output, " {}()", name)?;
 
-                match *body {
+                match **body {
                     CheckedStatement::Expression(_) => {
                         //C does not allow single statement bodies, they must be blocks
                         write!(self.output, "{{\n\t")?;
-                        self.emit_statement(*body)?;
+                        self.emit_statement(&*body)?;
                         write!(self.output, "}}\n")
                     }
                     CheckedStatement::FunctionDefinition { .. } => unreachable!(),
-                    _ => self.emit_statement(*body),
+                    _ => self.emit_statement(&*body),
                 }
             }
             CheckedStatement::VariableDeclaration {
@@ -75,13 +71,13 @@ impl<'src> Emitter<'src> {
                 write!(self.output, "while (")?;
                 self.emit_expr(condition)?;
                 write!(self.output, ") {{\n")?;
-                self.emit_statement(*body)?;
+                self.emit_statement(&*body)?;
                 write!(self.output, "}}\n")
             }
         }
     }
 
-    fn emit_type(&mut self, type_kind: TypeKind) -> Result<(), Error> {
+    fn emit_type(&mut self, type_kind: &TypeKind) -> Result<(), Error> {
         match type_kind {
             TypeKind::Void => write!(self.output, "void")?,
             TypeKind::Bool => write!(self.output, "bool")?,
@@ -91,13 +87,13 @@ impl<'src> Emitter<'src> {
         Ok(())
     }
 
-    fn emit_expr(&mut self, expr: CheckedExpression) -> Result<(), Error> {
-        match expr.kind {
+    fn emit_expr(&mut self, expr: &CheckedExpression) -> Result<(), Error> {
+        match &expr.kind {
             CheckedExpressionKind::BoolLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::IntLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::Parenthesized(expr) => {
                 write!(self.output, "(")?;
-                self.emit_expr(*expr)?;
+                self.emit_expr(&*expr)?;
                 write!(self.output, ")")?;
                 Ok(())
             }
@@ -106,7 +102,7 @@ impl<'src> Emitter<'src> {
                 operator,
                 right,
             } => {
-                self.emit_expr(*left)?;
+                self.emit_expr(&*left)?;
                 match operator {
                     CheckedBinaryOp::Add { .. } => write!(self.output, " + ")?,
                     CheckedBinaryOp::Sub { .. } => write!(self.output, " - ")?,
@@ -117,7 +113,7 @@ impl<'src> Emitter<'src> {
                     CheckedBinaryOp::Gt { .. } => write!(self.output, " > ")?,
                     CheckedBinaryOp::Assign { .. } => write!(self.output, " = ")?,
                 }
-                self.emit_expr(*right)?;
+                self.emit_expr(&*right)?;
                 Ok(())
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
@@ -126,7 +122,7 @@ impl<'src> Emitter<'src> {
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
-                            self.emit_expr(arguments[0].clone())?; //quelle domage
+                            self.emit_expr(&arguments[0])?; //quelle domage
                             write!(self.output, " ? \"true\" : \"false\")")?;
                             return Ok(());
                         }

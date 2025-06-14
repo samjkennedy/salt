@@ -1,3 +1,5 @@
+use crate::diagnostic::Diagnostic;
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TokenKind {
     IntLiteral(i64),
@@ -18,6 +20,7 @@ pub enum TokenKind {
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
+    EOF,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -51,31 +54,50 @@ impl<'src> Lexer<'src> {
         Lexer { input, cursor: 0 }
     }
 
-    pub fn next(&mut self) -> Option<Token> {
+    pub fn next(&mut self) -> Result<Token, Diagnostic> {
         self.skip_whitespace();
 
-        let c = self.peek()?;
+        if let Some(c) = self.peek() {
+            return match c {
+                '+' => Ok(self.make_token(TokenKind::Plus, 1)),
+                '-' => Ok(self.make_token(TokenKind::Minus, 1)),
+                '*' => Ok(self.make_token(TokenKind::Star, 1)),
+                '/' => Ok(self.make_token(TokenKind::Slash, 1)),
+                '%' => Ok(self.make_token(TokenKind::Percent, 1)),
+                '=' => Ok(self.make_token(TokenKind::Equals, 1)),
+                '(' => Ok(self.make_token(TokenKind::OpenParen, 1)),
+                ')' => Ok(self.make_token(TokenKind::CloseParen, 1)),
+                '{' => Ok(self.make_token(TokenKind::OpenCurly, 1)),
+                '}' => Ok(self.make_token(TokenKind::CloseCurly, 1)),
+                '<' => Ok(self.make_token(TokenKind::OpenAngle, 1)),
+                '>' => Ok(self.make_token(TokenKind::CloseAngle, 1)),
+                ';' => Ok(self.make_token(TokenKind::Semicolon, 1)),
+                '0'..='9' => Ok(self.lex_number()),
+                x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
+                _ => {
+                    self.cursor += 1;
+                    Err(Diagnostic {
+                        message: format!("Unexpected character '{}'", c),
+                        span: Span {
+                            start: self.cursor - 1,
+                            length: 1,
+                        },
+                    })
+                }
+            };
+        }
 
-        let token = match c {
-            '+' => Some(self.make_token(TokenKind::Plus, 1)),
-            '-' => Some(self.make_token(TokenKind::Minus, 1)),
-            '*' => Some(self.make_token(TokenKind::Star, 1)),
-            '/' => Some(self.make_token(TokenKind::Slash, 1)),
-            '%' => Some(self.make_token(TokenKind::Percent, 1)),
-            '=' => Some(self.make_token(TokenKind::Equals, 1)),
-            '(' => Some(self.make_token(TokenKind::OpenParen, 1)),
-            ')' => Some(self.make_token(TokenKind::CloseParen, 1)),
-            '{' => Some(self.make_token(TokenKind::OpenCurly, 1)),
-            '}' => Some(self.make_token(TokenKind::CloseCurly, 1)),
-            '<' => Some(self.make_token(TokenKind::OpenAngle, 1)),
-            '>' => Some(self.make_token(TokenKind::CloseAngle, 1)),
-            ';' => Some(self.make_token(TokenKind::Semicolon, 1)),
-            '0'..='9' => Some(self.lex_number()),
-            x if x.is_alphabetic() => Some(self.lex_identifier_or_keyword()),
-            _ => todo!("unexpected character {}", c),
-        }?;
+        Ok(Token {
+            kind: TokenKind::EOF,
+            span: Span {
+                start: self.cursor,
+                length: 0,
+            },
+        })
+    }
 
-        Some(token)
+    pub fn has_next(&self) -> bool {
+        self.cursor < self.input.len()
     }
 
     fn advance(&mut self) {
