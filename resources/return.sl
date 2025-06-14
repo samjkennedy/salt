@@ -1,7 +1,8 @@
-void sum(i64 a, i64 b) {
+i64 sum(i64 a, i64 b) {
     return a + b;
 }
 
 void main() {
-    sum(4, 5);
+    print(sum(6, 5));
+    return;
 }

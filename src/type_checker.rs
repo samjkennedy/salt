@@ -313,7 +313,7 @@ impl<'src> TypeChecker<'src> {
                 None => match self.get_return_context() {
                     TypeKind::Void => Ok(CheckedStatement::Return { expression: None }),
                     expected => {
-                        return Err(Diagnostic {
+                        Err(Diagnostic {
                             message: format!("expected return value of `{}`", expected),
                             span: statement.span,
                         })
@@ -329,12 +329,12 @@ impl<'src> TypeChecker<'src> {
     fn check_function_definition(
         &mut self,
         return_type: Token,
-        name: Token,
+        name_token: Token,
         parameters: Vec<Statement>,
         body: Box<Statement>,
     ) -> Result<CheckedStatement, Diagnostic> {
         let type_identifier = return_type.text;
-        let name = name.text;
+        let name = name_token.text;
         let return_type_kind = self.bind_type_kind(type_identifier, return_type.span)?;
 
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
@@ -381,12 +381,37 @@ impl<'src> TypeChecker<'src> {
         let checked_body = self.check_statement(*body)?;
         self.scope.pop();
 
+        if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
+            return Err(Diagnostic {
+                message: "not all branches return".to_string(),
+                span: name_token.span,
+            })
+        }
+
         Ok(CheckedStatement::FunctionDefinition {
             return_type: return_type_kind,
             name,
             parameters: checked_parameters,
             body: Box::new(checked_body),
         })
+    }
+
+    fn all_branches_return(statement: &CheckedStatement) -> bool {
+        match statement {
+            CheckedStatement::Expression(_) => false,
+            CheckedStatement::Block(statements) => {
+                if statements.is_empty() {
+                    return false;
+                }
+                //This doesn't seem quite right
+                Self::all_branches_return(statements.last().unwrap())
+            }
+            CheckedStatement::FunctionDefinition { .. } => false,
+            CheckedStatement::Parameter { .. } => unreachable!(),
+            CheckedStatement::VariableDeclaration { .. } => false,
+            CheckedStatement::While { condition: _condition, body } => false, //TODO technically if condition is always true and body returns, this is true
+            CheckedStatement::Return { .. } => true,
+        }
     }
 
     fn check_variable_declaration(
