@@ -31,11 +31,11 @@ impl Emitter {
                 writeln!(self.output, ";")
             }
             CheckedStatement::Block(statements) => {
-                write!(self.output, "{{\n")?;
+                writeln!(self.output, "{{")?;
                 for statement in statements {
                     self.emit_statement(statement)?
                 }
-                write!(self.output, "}}\n")
+                writeln!(self.output, "}}")
             }
             CheckedStatement::FunctionDefinition {
                 return_type,
@@ -46,8 +46,7 @@ impl Emitter {
                 self.emit_type(return_type)?;
                 write!(self.output, " {}(", name)?;
 
-                let mut i = 0;
-                for parameter in parameters {
+                for (i, parameter) in parameters.iter().enumerate() {
                     if let CheckedStatement::Parameter { type_kind, name } = parameter {
                         self.emit_type(type_kind)?;
                         write!(self.output, " {}", name)?;
@@ -57,7 +56,6 @@ impl Emitter {
                     if i < parameters.len() - 1 {
                         write!(self.output, ", ")?;
                     }
-                    i += 1;
                 }
                 write!(self.output, ")")?;
 
@@ -65,11 +63,11 @@ impl Emitter {
                     CheckedStatement::Expression(_) => {
                         //C does not allow single statement bodies, they must be blocks
                         write!(self.output, "{{\n\t")?;
-                        self.emit_statement(&*body)?;
-                        write!(self.output, "}}\n")
+                        self.emit_statement(body)?;
+                        writeln!(self.output, "}}")
                     }
                     CheckedStatement::FunctionDefinition { .. } => unreachable!(),
-                    _ => self.emit_statement(&*body),
+                    _ => self.emit_statement(body),
                 }
             }
             CheckedStatement::VariableDeclaration {
@@ -80,25 +78,42 @@ impl Emitter {
                 self.emit_type(type_kind)?;
                 write!(self.output, " {} = ", name)?;
                 self.emit_expr(initialiser)?;
-                write!(self.output, ";\n")
+                writeln!(self.output, ";")
             }
             CheckedStatement::While { condition, body } => {
                 write!(self.output, "while (")?;
                 self.emit_expr(condition)?;
-                write!(self.output, ") {{\n")?;
-                self.emit_statement(&*body)?;
-                write!(self.output, "}}\n")
+                writeln!(self.output, ") {{")?;
+                self.emit_statement(body)?;
+                writeln!(self.output, "}}")
+            }
+            CheckedStatement::If {
+                condition,
+                body,
+                else_branch,
+            } => {
+                write!(self.output, "if (")?;
+                self.emit_expr(condition)?;
+                writeln!(self.output, ") {{")?;
+                self.emit_statement(body)?;
+                writeln!(self.output, "}}")?;
+
+                if let Some(else_body) = else_branch {
+                    writeln!(self.output, "else {{")?;
+                    self.emit_statement(else_body)?;
+                    writeln!(self.output, "}}")?;
+                }
+                Ok(())
             }
             CheckedStatement::Parameter { .. } => {
                 unreachable!("should be handled by function definition")
             }
             CheckedStatement::Return { expression } => {
                 write!(self.output, "return ")?;
-                match expression {
-                    Some(expr) => self.emit_expr(expr)?,
-                    None => {}
+                if let Some(expr) = expression {
+                    self.emit_expr(expr)?
                 }
-                write!(self.output, ";\n")
+                writeln!(self.output, ";")
             }
         }
     }
@@ -119,7 +134,7 @@ impl Emitter {
             CheckedExpressionKind::IntLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::Parenthesized(expr) => {
                 write!(self.output, "(")?;
-                self.emit_expr(&*expr)?;
+                self.emit_expr(expr)?;
                 write!(self.output, ")")?;
                 Ok(())
             }
@@ -128,7 +143,7 @@ impl Emitter {
                 operator,
                 right,
             } => {
-                self.emit_expr(&*left)?;
+                self.emit_expr(left)?;
                 match operator {
                     CheckedBinaryOp::Add { .. } => write!(self.output, " + ")?,
                     CheckedBinaryOp::Sub { .. } => write!(self.output, " - ")?,
@@ -139,7 +154,7 @@ impl Emitter {
                     CheckedBinaryOp::Gt { .. } => write!(self.output, " > ")?,
                     CheckedBinaryOp::Assign { .. } => write!(self.output, " = ")?,
                 }
-                self.emit_expr(&*right)?;
+                self.emit_expr(right)?;
                 Ok(())
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
@@ -159,15 +174,13 @@ impl Emitter {
                     write!(self.output, "{}(", name)?;
                 }
 
-                let mut i = 0;
                 let args_count = arguments.len();
 
-                for arg in arguments {
+                for (i, arg) in arguments.iter().enumerate() {
                     self.emit_expr(arg)?;
                     if i < args_count - 1 {
                         write!(self.output, ", ")?;
                     }
-                    i += 1;
                 }
 
                 write!(self.output, ")")
@@ -179,7 +192,7 @@ impl Emitter {
     }
 
     fn emit_preamble(&mut self) -> Result<(), Error> {
-        write!(self.output, "#include <stdbool.h>\n")?;
+        writeln!(self.output, "#include <stdbool.h>")?;
         Ok(())
     }
 }

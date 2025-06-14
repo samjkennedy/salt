@@ -23,7 +23,9 @@ pub enum TokenKind {
     WhileKeyword,
     ReturnKeyword,
     MutKeyword,
-    EOF,
+    IfKeyword,
+    ElseKeyword,
+    EndOfFile,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -93,7 +95,7 @@ impl<'src> Lexer<'src> {
         }
 
         Ok(Token {
-            kind: TokenKind::EOF,
+            kind: TokenKind::EndOfFile,
             span: Span {
                 start: self.cursor,
                 length: 0,
@@ -120,7 +122,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.peek().map_or(false, |c| c.is_ascii_whitespace()) {
+        while self.peek().is_some_and(|c| c.is_ascii_whitespace()) {
             self.advance();
         }
     }
@@ -167,7 +169,7 @@ impl<'src> Lexer<'src> {
         let start = self.cursor;
 
         while let Some(c) = self.peek() {
-            if c.is_alphanumeric() {
+            if c.is_alphanumeric() || c == '_' {
                 self.advance();
             } else {
                 break;
@@ -193,6 +195,16 @@ impl<'src> Lexer<'src> {
             },
             "while" => Token {
                 kind: TokenKind::WhileKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "if" => Token {
+                kind: TokenKind::IfKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "else" => Token {
+                kind: TokenKind::ElseKeyword,
                 span,
                 text: value.to_owned(),
             },

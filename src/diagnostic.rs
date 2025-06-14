@@ -13,7 +13,7 @@ const CYAN: &str = "\x1b[36m";
 const BRIGHT_RED: &str = "\x1b[91m";
 
 impl Diagnostic {
-    pub fn report_with_source(&self, filename: &String, src: &String) {
+    pub fn report_with_source(&self, filename: &String, src: &str) {
         let mut line_start = 0;
 
         for (line_index, line) in src.lines().enumerate() {
