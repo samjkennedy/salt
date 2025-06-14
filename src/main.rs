@@ -8,11 +8,11 @@ use std::process::Command;
 use std::{env, fs};
 use type_checker::TypeChecker;
 
+mod diagnostic;
+mod emitter;
 mod lexer;
 mod parser;
 mod type_checker;
-mod emitter;
-mod diagnostic;
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).peekable();
@@ -20,10 +20,10 @@ fn main() -> Result<()> {
     let input_path = args
         .next()
         .context("Usage: saltc <input>.sl [-o <output>.c] [--keep-c]")?;
-    
+
     let mut output_c_path: Option<String> = None;
     let mut keep_c_file = false;
-    
+
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" => {
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    
+
     // Determine .c output path
     let output_c_path = output_c_path.unwrap_or_else(|| {
         let input_path_obj = Path::new(&input_path);
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     let mut parser = Parser::new(&mut lexer);
     let mut type_checker = TypeChecker::new(&mut parser);
 
-    let mut diagnostics =  Vec::new();
+    let mut diagnostics = Vec::new();
     let mut statements = Vec::new();
 
     while type_checker.has_next() {

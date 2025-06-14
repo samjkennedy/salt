@@ -1,6 +1,5 @@
 use crate::type_checker::{
-    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement,
-    TypeKind,
+    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, TypeKind,
 };
 use std::fs::File;
 use std::io::Error;
@@ -41,10 +40,26 @@ impl Emitter {
             CheckedStatement::FunctionDefinition {
                 return_type,
                 name,
+                parameters,
                 body,
             } => {
                 self.emit_type(return_type)?;
-                write!(self.output, " {}()", name)?;
+                write!(self.output, " {}(", name)?;
+
+                let mut i = 0;
+                for parameter in parameters {
+                    if let CheckedStatement::Parameter { type_kind, name } = parameter {
+                        self.emit_type(type_kind)?;
+                        write!(self.output, " {}", name)?;
+                    } else {
+                        unreachable!()
+                    }
+                    if i < parameters.len() - 1 {
+                        write!(self.output, ", ")?;
+                    }
+                    i += 1;
+                }
+                write!(self.output, ")")?;
 
                 match **body {
                     CheckedStatement::Expression(_) => {
@@ -73,6 +88,9 @@ impl Emitter {
                 write!(self.output, ") {{\n")?;
                 self.emit_statement(&*body)?;
                 write!(self.output, "}}\n")
+            }
+            CheckedStatement::Parameter { .. } => {
+                unreachable!("should be handled by function definition")
             }
         }
     }
@@ -122,7 +140,7 @@ impl Emitter {
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
-                            self.emit_expr(&arguments[0])?; //quelle domage
+                            self.emit_expr(&arguments[0])?;
                             write!(self.output, " ? \"true\" : \"false\")")?;
                             return Ok(());
                         }
@@ -146,7 +164,9 @@ impl Emitter {
 
                 write!(self.output, ")")
             }
-            CheckedExpressionKind::Variable { name } => write!(self.output, "{}", name),
+            CheckedExpressionKind::Variable { name, .. } => {
+                write!(self.output, "{}", name)
+            }
         }
     }
 

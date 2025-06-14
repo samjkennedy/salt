@@ -13,7 +13,6 @@ const CYAN: &str = "\x1b[36m";
 const BRIGHT_RED: &str = "\x1b[91m";
 
 impl Diagnostic {
-
     pub fn report_with_source(&self, filename: &String, src: &String) {
         let mut line_start = 0;
 
@@ -35,12 +34,18 @@ impl Diagnostic {
 
                 eprintln!(
                     "{}{}error:{} {} {}{}{}\n {}|\t{}\n  |\t{}{}{}",
-                    BOLD, RED, RESET,
+                    BOLD,
+                    RED,
+                    RESET,
                     self.message,
-                    CYAN, location, RESET,
+                    CYAN,
+                    location,
+                    RESET,
                     line_index + 1,
                     line,
-                    BRIGHT_RED, marker_line, RESET
+                    BRIGHT_RED,
+                    marker_line,
+                    RESET
                 );
                 return;
             }
@@ -53,8 +58,7 @@ impl Diagnostic {
         // fallback in case span doesn't match any line
         eprintln!(
             "error: {} (at byte offset {})",
-            self.message,
-            self.span.start
+            self.message, self.span.start
         );
     }
 }
