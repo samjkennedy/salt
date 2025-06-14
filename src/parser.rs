@@ -100,18 +100,18 @@ enum ParseContext {
 }
 
 pub struct Parser<'src> {
-    current: Result<Token, Diagnostic>,
+    current: Token,
     lexer: &'src mut Lexer<'src>,
     context: ParseContext,
 }
 
 impl<'src> Parser<'src> {
-    pub fn new(lexer: &'src mut Lexer<'src>) -> Parser<'src> {
-        Parser {
-            current: lexer.next(),
+    pub fn new(lexer: &'src mut Lexer<'src>) -> Result<Parser<'src>, Diagnostic> {
+        Ok(Parser {
+            current: lexer.next()?, //Naively assume the first character is allowed
             lexer,
             context: ParseContext::Global,
-        }
+        })
     }
 
     pub fn has_next(&self) -> bool {
@@ -120,12 +120,12 @@ impl<'src> Parser<'src> {
 
     //TODO: this results in only being able to report 1 diagnostic per function...
     pub fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
-        match self.peek()?.kind {
+        match self.peek().kind {
             TokenKind::OpenCurly => {
                 let open_curly = self.expect(TokenKind::OpenCurly)?;
                 let mut statements = vec![];
 
-                while self.peek()?.kind != TokenKind::CloseCurly {
+                while self.peek().kind != TokenKind::CloseCurly {
                     statements.push(self.parse_statement()?);
                 }
                 let close_curly = self.expect(TokenKind::CloseCurly)?;
@@ -142,10 +142,10 @@ impl<'src> Parser<'src> {
                 self.expect(TokenKind::OpenParen)?;
 
                 let mut parameters: Vec<Statement> = Vec::new();
-                while self.peek()?.kind != TokenKind::CloseParen {
+                while self.peek().kind != TokenKind::CloseParen {
                     parameters.push(self.parse_parameter()?);
 
-                    if self.peek()?.kind != TokenKind::CloseParen {
+                    if self.peek().kind != TokenKind::CloseParen {
                         self.expect(TokenKind::Comma)?;
                     }
                 }
@@ -171,7 +171,7 @@ impl<'src> Parser<'src> {
                 let identifier = self.expect(TokenKind::Identifier(type_name))?;
 
                 // Peek ahead to see if after the identifier we have another identifier (variable declaration)
-                if let TokenKind::Identifier(var_name) = self.peek()?.kind {
+                if let TokenKind::Identifier(var_name) = self.peek().kind {
                     // Looks like a var decl to me
                     let name_token = self.expect(TokenKind::Identifier(var_name.clone()))?;
 
@@ -189,7 +189,7 @@ impl<'src> Parser<'src> {
                         },
                     })
                 } else {
-                    let expression = if self.peek()?.kind == TokenKind::OpenParen {
+                    let expression = if self.peek().kind == TokenKind::OpenParen {
                         self.parse_function_call(identifier)?
                     } else {
                         self.parse_binary_expression_right(
@@ -228,7 +228,7 @@ impl<'src> Parser<'src> {
 
                 let body = self.parse_statement()?;
 
-                if self.peek()?.kind == TokenKind::ElseKeyword {
+                if self.peek().kind == TokenKind::ElseKeyword {
                     self.expect(TokenKind::ElseKeyword)?;
                     let else_branch = self.parse_statement()?;
 
@@ -254,7 +254,7 @@ impl<'src> Parser<'src> {
             TokenKind::ReturnKeyword => {
                 let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
 
-                if self.peek()?.kind == TokenKind::Semicolon {
+                if self.peek().kind == TokenKind::Semicolon {
                     let semicolon = self.expect(TokenKind::Semicolon)?;
                     return Ok(Statement {
                         span: Span::from_to(return_keyword.span, semicolon.span),
@@ -290,11 +290,11 @@ impl<'src> Parser<'src> {
 
     fn next(&mut self) -> Result<Token, Diagnostic> {
         let token = self.current.clone();
-        self.current = self.lexer.next();
-        token
+        self.current = self.lexer.next()?;
+        Ok(token)
     }
 
-    fn peek(&self) -> Result<Token, Diagnostic> {
+    fn peek(&self) -> Token {
         self.current.clone()
     }
 
@@ -311,7 +311,8 @@ impl<'src> Parser<'src> {
         parent_precedence: i64,
         mut left: Expression,
     ) -> Result<Expression, Diagnostic> {
-        while let Ok(token) = self.peek() {
+        loop {
+            let token = self.peek();
             if let Some(op) = Self::get_binary_op(token.kind) {
                 if !left.is_lvalue() && op == BinaryOp::Assign {
                     return Err(Diagnostic {
@@ -341,12 +342,10 @@ impl<'src> Parser<'src> {
                 return Ok(left);
             }
         }
-
-        Ok(left)
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, Diagnostic> {
-        let token = self.peek()?;
+        let token = self.peek();
 
         let primary = match token.kind {
             TokenKind::TrueKeyword => {
@@ -373,7 +372,7 @@ impl<'src> Parser<'src> {
             TokenKind::OpenParen => self.parse_parenthesised(),
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(TokenKind::Identifier(identifier))?;
-                if self.peek()?.kind != TokenKind::OpenParen {
+                if self.peek().kind != TokenKind::OpenParen {
                     return Ok(Expression {
                         span: identifier.span,
                         kind: ExpressionKind::Variable(identifier),
@@ -398,11 +397,11 @@ impl<'src> Parser<'src> {
         let _open_paren = self.expect(TokenKind::OpenParen)?;
 
         let mut arguments = vec![];
-        while self.peek()?.kind != TokenKind::CloseParen {
+        while self.peek().kind != TokenKind::CloseParen {
             let arg = self.parse_expression()?;
             arguments.push(arg);
 
-            if self.peek()?.kind != TokenKind::CloseParen {
+            if self.peek().kind != TokenKind::CloseParen {
                 self.expect(TokenKind::Comma)?;
             }
         }
@@ -476,7 +475,7 @@ impl<'src> Parser<'src> {
 
     fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
         //For now only parse simple types and names, in future allow complex types and `mut`
-        let mut_keyword = if let TokenKind::MutKeyword = &self.peek()?.kind {
+        let mut_keyword = if let TokenKind::MutKeyword = &self.peek().kind {
             Some(self.expect(TokenKind::MutKeyword)?)
         } else {
             None

@@ -61,7 +61,13 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to read input file `{}`", input_path))?;
 
     let mut lexer = Lexer::new(&program);
-    let mut parser = Parser::new(&mut lexer);
+    let mut parser = match Parser::new(&mut lexer) {
+        Ok(p) => p,
+        Err(diagnostic) => {
+            diagnostic.report_with_source(&input_path, &program);
+            return Ok(());
+        }
+    };
     let mut type_checker = TypeChecker::new(&mut parser);
 
     let mut diagnostics = Vec::new();
