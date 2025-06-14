@@ -26,6 +26,11 @@ pub enum CheckedStatement {
         condition: CheckedExpression,
         body: Box<CheckedStatement>,
     },
+    If {
+        condition: CheckedExpression,
+        body: Box<CheckedStatement>,
+        else_branch: Option<Box<CheckedStatement>>,
+    },
     Return {
         expression: Option<CheckedExpression>,
     },
@@ -65,14 +70,14 @@ pub enum CheckedBinaryOp {
 impl CheckedBinaryOp {
     fn get_result_type(&self) -> TypeKind {
         match self {
-            CheckedBinaryOp::Add { result } => result.clone(),
-            CheckedBinaryOp::Sub { result } => result.clone(),
-            CheckedBinaryOp::Mul { result } => result.clone(),
-            CheckedBinaryOp::Div { result } => result.clone(),
-            CheckedBinaryOp::Mod { result } => result.clone(),
-            CheckedBinaryOp::Lt { result } => result.clone(),
-            CheckedBinaryOp::Gt { result } => result.clone(),
-            CheckedBinaryOp::Assign { result } => result.clone(),
+            CheckedBinaryOp::Add { result } => *result,
+            CheckedBinaryOp::Sub { result } => *result,
+            CheckedBinaryOp::Mul { result } => *result,
+            CheckedBinaryOp::Div { result } => *result,
+            CheckedBinaryOp::Mod { result } => *result,
+            CheckedBinaryOp::Lt { result } => *result,
+            CheckedBinaryOp::Gt { result } => *result,
+            CheckedBinaryOp::Assign { result } => *result,
         }
     }
 }
@@ -243,7 +248,7 @@ impl<'src> TypeChecker<'src> {
 
     fn check_statement(&mut self, statement: Statement) -> Result<CheckedStatement, Diagnostic> {
         match statement.kind {
-            StatementKind::Expression(expr, _) => {
+            StatementKind::Expression(expr) => {
                 let checked_expr = self.check_expr(expr)?;
                 Ok(CheckedStatement::Expression(checked_expr))
             }
@@ -286,6 +291,34 @@ impl<'src> TypeChecker<'src> {
                     condition: checked_condition,
                     body,
                 })
+            }
+            StatementKind::If {
+                condition,
+                body,
+                else_branch,
+            } => {
+                let condition_span = condition.span;
+                let condition = self.check_expr(condition)?;
+
+                Self::expect_type(&TypeKind::Bool, &condition.type_kind, condition_span)?;
+                let body = self.check_statement(*body)?;
+
+                match else_branch {
+                    Some(else_branch) => {
+                        let else_branch = self.check_statement(*else_branch)?;
+
+                        Ok(CheckedStatement::If {
+                            condition,
+                            body: Box::new(body),
+                            else_branch: Some(Box::new(else_branch)),
+                        })
+                    }
+                    None => Ok(CheckedStatement::If {
+                        condition,
+                        body: Box::new(body),
+                        else_branch: None,
+                    }),
+                }
             }
             StatementKind::Return { expression } => match expression {
                 Some(expr) => {
@@ -409,6 +442,18 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
+            CheckedStatement::If {
+                condition: _condition,
+                body,
+                else_branch,
+            } => {
+                match else_branch {
+                    Some(else_branch) => {
+                        Self::all_branches_return(body) && Self::all_branches_return(else_branch)
+                    }
+                    None => false, //TODO technically if condition is always true and body returns, this is true
+                }
+            }
             CheckedStatement::Return { .. } => true,
         }
     }
@@ -512,10 +557,9 @@ impl<'src> TypeChecker<'src> {
                                     });
                             }
 
-                            let mut i = 0;
                             let mut checked_args: Vec<CheckedExpression> = Vec::new();
 
-                            for arg in arguments {
+                            for (i, arg) in arguments.into_iter().enumerate() {
                                 let arg_span = arg.span;
                                 let checked_arg = self.check_expr(arg)?;
 
@@ -526,8 +570,6 @@ impl<'src> TypeChecker<'src> {
                                 )?;
 
                                 checked_args.push(checked_arg);
-
-                                i += 1;
                             }
 
                             //TODO: validate that args match function params

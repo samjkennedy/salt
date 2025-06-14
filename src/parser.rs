@@ -3,7 +3,7 @@ use crate::lexer::{Lexer, Span, Token, TokenKind};
 
 #[derive(Debug, Clone)]
 pub enum StatementKind {
-    Expression(Expression, Token),
+    Expression(Expression),
     Block(Vec<Statement>),
     FunctionDefinition {
         return_type: Token, //TODO could be a whole expression i.e. *int[]
@@ -19,9 +19,7 @@ pub enum StatementKind {
     VariableDeclaration {
         type_name: Token, //TODO could be a whole expression i.e. *int[]
         name: Token,
-        equals: Token,
         initialiser: Expression,
-        semicolon: Token,
     },
     While {
         condition: Expression,
@@ -29,6 +27,11 @@ pub enum StatementKind {
     },
     Return {
         expression: Option<Expression>,
+    },
+    If {
+        condition: Expression,
+        body: Box<Statement>,
+        else_branch: Option<Box<Statement>>,
     },
 }
 
@@ -172,7 +175,7 @@ impl<'src> Parser<'src> {
                     // Looks like a var decl to me
                     let name_token = self.expect(TokenKind::Identifier(var_name.clone()))?;
 
-                    let equals = self.expect(TokenKind::Equals)?;
+                    self.expect(TokenKind::Equals)?;
                     let initialiser = self.parse_expression()?;
 
                     let semicolon = self.expect(TokenKind::Semicolon)?;
@@ -182,9 +185,7 @@ impl<'src> Parser<'src> {
                         kind: StatementKind::VariableDeclaration {
                             type_name: identifier,
                             name: name_token,
-                            equals,
                             initialiser,
-                            semicolon,
                         },
                     })
                 } else {
@@ -204,7 +205,7 @@ impl<'src> Parser<'src> {
 
                     Ok(Statement {
                         span: Span::from_to(expression.span, semicolon.span),
-                        kind: StatementKind::Expression(expression, semicolon),
+                        kind: StatementKind::Expression(expression),
                     })
                 }
             }
@@ -220,6 +221,35 @@ impl<'src> Parser<'src> {
                         body: Box::new(body),
                     },
                 })
+            }
+            TokenKind::IfKeyword => {
+                let if_keyword = self.expect(TokenKind::IfKeyword)?;
+                let condition = self.parse_expression()?;
+
+                let body = self.parse_statement()?;
+
+                if self.peek()?.kind == TokenKind::ElseKeyword {
+                    self.expect(TokenKind::ElseKeyword)?;
+                    let else_branch = self.parse_statement()?;
+
+                    Ok(Statement {
+                        span: Span::from_to(if_keyword.span, else_branch.span),
+                        kind: StatementKind::If {
+                            condition,
+                            body: Box::new(body),
+                            else_branch: Some(Box::new(else_branch)),
+                        },
+                    })
+                } else {
+                    Ok(Statement {
+                        span: Span::from_to(if_keyword.span, body.span),
+                        kind: StatementKind::If {
+                            condition,
+                            body: Box::new(body),
+                            else_branch: None,
+                        },
+                    })
+                }
             }
             TokenKind::ReturnKeyword => {
                 let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
@@ -248,7 +278,7 @@ impl<'src> Parser<'src> {
 
                 Ok(Statement {
                     span: Span::from_to(expr.span, semi.span),
-                    kind: StatementKind::Expression(expr, semi),
+                    kind: StatementKind::Expression(expr),
                 })
             }
         }
@@ -273,7 +303,6 @@ impl<'src> Parser<'src> {
         parent_precedence: i64,
     ) -> Result<Expression, Diagnostic> {
         let left = self.parse_primary_expression()?;
-
         self.parse_binary_expression_right(parent_precedence, left)
     }
 
@@ -319,7 +348,7 @@ impl<'src> Parser<'src> {
     fn parse_primary_expression(&mut self) -> Result<Expression, Diagnostic> {
         let token = self.peek()?;
 
-        match token.kind {
+        let primary = match token.kind {
             TokenKind::TrueKeyword => {
                 self.next()?;
                 Ok(Expression {
@@ -353,11 +382,16 @@ impl<'src> Parser<'src> {
 
                 self.parse_function_call(identifier)
             }
-            _ => Err(Diagnostic {
-                message: format!("parsing {:?} is not yet implemented", token.kind),
-                span: token.span,
-            }),
-        }
+            _ => {
+                self.lexer.next()?;
+                Err(Diagnostic {
+                    message: format!("parsing {:?} is not yet implemented", token.kind),
+                    span: token.span,
+                })
+            }
+        };
+
+        primary
     }
 
     fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
