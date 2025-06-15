@@ -1,7 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Span, Token};
 use crate::parser::{
-    BinaryOp, Expression, ExpressionKind, Parser, Statement, StatementKind, TypeExpression,
+    BinaryOp, Expression, ExpressionKind, Parser, Statement, StatementKind, TypeExpression, UnaryOp,
 };
 use std::fmt::{Display, Formatter};
 
@@ -40,6 +40,7 @@ pub enum CheckedStatement {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TypeKind {
+    Any, //Only temp for print for now
     Void,
     Bool,
     I64,
@@ -48,17 +49,24 @@ pub enum TypeKind {
         size: i64,
         element_type: Box<TypeKind>,
     },
+    Pointer {
+        reference_type: Box<TypeKind>,
+    },
 }
 
 impl Display for TypeKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            TypeKind::Any => write!(f, "any"),
             TypeKind::Void => write!(f, "void"),
             TypeKind::Bool => write!(f, "bool"),
             TypeKind::I64 => write!(f, "i64"),
             TypeKind::F32 => write!(f, "f32"),
             TypeKind::Array { size, element_type } => {
                 write!(f, "[{}]{}", size, element_type)
+            }
+            TypeKind::Pointer { reference_type } => {
+                write!(f, "*{}", reference_type)
             }
         }
     }
@@ -91,6 +99,21 @@ impl CheckedBinaryOp {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum CheckedUnaryOp {
+    Ref { result: TypeKind },
+    Deref { result: TypeKind },
+}
+
+impl CheckedUnaryOp {
+    fn get_result_type(&self) -> TypeKind {
+        match self {
+            CheckedUnaryOp::Ref { result } => result.clone(),
+            CheckedUnaryOp::Deref { result } => result.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CheckedExpression {
     pub kind: CheckedExpressionKind,
@@ -109,6 +132,10 @@ impl CheckedExpression {
                 operator: _operator,
                 right,
             } => left.is_lvalue() && right.is_lvalue(),
+            CheckedExpressionKind::Unary {
+                operator: _operator,
+                operand,
+            } => operand.is_lvalue(),
             CheckedExpressionKind::FunctionCall { .. } => false,
             CheckedExpressionKind::Variable {
                 name: _name,
@@ -129,6 +156,10 @@ pub enum CheckedExpressionKind {
         left: Box<CheckedExpression>,
         operator: CheckedBinaryOp,
         right: Box<CheckedExpression>,
+    },
+    Unary {
+        operator: CheckedUnaryOp,
+        operand: Box<CheckedExpression>,
     },
     FunctionCall {
         name: String,
@@ -169,7 +200,7 @@ impl Scope {
             identifiers: vec![ScopedIdentifier::Function {
                 return_type: TypeKind::Void,
                 name: "print".to_string(),
-                param_types: vec![TypeKind::I64], //TODO: varargs
+                param_types: vec![TypeKind::Any], //TODO: varargs
             }],
             return_context,
         }
@@ -561,6 +592,20 @@ impl<'src> TypeChecker<'src> {
                     kind: CheckedExpressionKind::ArrayLiteral(checked_elements),
                 })
             }
+            ExpressionKind::Unary { operator, operand } => {
+                let checked_operand = self.check_expr(*operand)?;
+
+                let checked_op =
+                    Self::get_unary_op(&operator, checked_operand.type_kind.clone(), expr.span)?;
+
+                Ok(CheckedExpression {
+                    type_kind: checked_op.get_result_type(),
+                    kind: CheckedExpressionKind::Unary {
+                        operator: checked_op,
+                        operand: Box::new(checked_operand),
+                    },
+                })
+            }
             ExpressionKind::Binary { left, op, right } => {
                 let left_span = left.span;
                 let checked_left = self.check_expr(*left)?;
@@ -606,9 +651,9 @@ impl<'src> TypeChecker<'src> {
                         {
                             if arguments.len() != param_types.len() {
                                 return Err(Diagnostic {
-                                        message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, param_types.len(),  arguments.len()),
-                                        span: expr.span,
-                                    });
+                                    message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, param_types.len(), arguments.len()),
+                                    span: expr.span,
+                                });
                             }
 
                             let mut checked_args: Vec<CheckedExpression> = Vec::new();
@@ -694,6 +739,33 @@ impl<'src> TypeChecker<'src> {
                     Err(Diagnostic {
                         message: format!("cannot index type `{}`", checked_array.type_kind),
                         span: expr.span,
+                    })
+                }
+            }
+        }
+    }
+
+    fn get_unary_op(
+        op: &UnaryOp,
+        operand: TypeKind,
+        span: Span,
+    ) -> Result<CheckedUnaryOp, Diagnostic> {
+        match op {
+            UnaryOp::Ref => Ok(CheckedUnaryOp::Ref {
+                result: TypeKind::Pointer {
+                    reference_type: Box::new(operand),
+                },
+            }),
+
+            UnaryOp::Deref => {
+                if let TypeKind::Pointer { reference_type } = operand {
+                    Ok(CheckedUnaryOp::Deref {
+                        result: *reference_type,
+                    })
+                } else {
+                    Err(Diagnostic {
+                        message: format!("cannot dereference non-pointer type {}", operand),
+                        span,
                     })
                 }
             }
@@ -788,6 +860,9 @@ impl<'src> TypeChecker<'src> {
     }
 
     fn expect_type(expected: &TypeKind, actual: &TypeKind, span: Span) -> Result<(), Diagnostic> {
+        if expected == &TypeKind::Any {
+            return Ok(());
+        }
         //TODO: more sophisticated checking, integer size coersion etc
         if expected != actual {
             return Err(Diagnostic {
@@ -819,6 +894,12 @@ impl<'src> TypeChecker<'src> {
                 Ok(TypeKind::Array {
                     size,
                     element_type: Box::new(element_type),
+                })
+            }
+            TypeExpression::Pointer(_, reference_type) => {
+                let reference_type = self.bind_type_kind(*reference_type)?;
+                Ok(TypeKind::Pointer {
+                    reference_type: Box::new(reference_type),
                 })
             }
         }

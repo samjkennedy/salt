@@ -1,5 +1,6 @@
 use crate::type_checker::{
-    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, TypeKind,
+    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, CheckedUnaryOp,
+    TypeKind,
 };
 use std::fs::File;
 use std::io::Error;
@@ -119,6 +120,7 @@ impl Emitter {
 
     fn emit_type(&mut self, type_kind: &TypeKind) -> Result<(), Error> {
         match type_kind {
+            TypeKind::Any => unreachable!(),
             TypeKind::Void => write!(self.output, "void")?,
             TypeKind::Bool => write!(self.output, "bool")?,
             TypeKind::I64 => write!(self.output, "long")?,
@@ -130,12 +132,14 @@ impl Emitter {
                 self.emit_type(element_type)?;
                 write!(self.output, "[]")?
             }
+            TypeKind::Pointer { reference_type } => write!(self.output, "{}*", reference_type)?,
         }
         Ok(())
     }
 
     fn emit_var_decl_type(&mut self, type_kind: &TypeKind, name: &str) -> Result<(), Error> {
         match type_kind {
+            TypeKind::Any => unreachable!(),
             TypeKind::Void => write!(self.output, "void {}", name)?, //TODO void variables? Remove this
             TypeKind::Bool => write!(self.output, "bool {}", name)?,
             TypeKind::I64 => write!(self.output, "long  {}", name)?,
@@ -143,6 +147,10 @@ impl Emitter {
             TypeKind::Array { size, element_type } => {
                 self.emit_type(element_type)?;
                 write!(self.output, " {}[{}]", name, size)?;
+            }
+            TypeKind::Pointer { reference_type } => {
+                self.emit_type(reference_type)?;
+                write!(self.output, " *{}", name)?
             }
         }
         Ok(())
@@ -182,6 +190,13 @@ impl Emitter {
                 write!(self.output, "}})")
                 */
             }
+            CheckedExpressionKind::Unary { operator, operand } => {
+                match operator {
+                    CheckedUnaryOp::Ref { .. } => write!(self.output, " &")?,
+                    CheckedUnaryOp::Deref { .. } => write!(self.output, " *")?,
+                }
+                self.emit_expr(operand)
+            }
             CheckedExpressionKind::Binary {
                 left,
                 operator,
@@ -198,12 +213,12 @@ impl Emitter {
                     CheckedBinaryOp::Gt { .. } => write!(self.output, " > ")?,
                     CheckedBinaryOp::Assign { .. } => write!(self.output, " = ")?,
                 }
-                self.emit_expr(right)?;
-                Ok(())
+                self.emit_expr(right)
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
                 if name == "print" {
                     match arguments[0].type_kind {
+                        TypeKind::Any => unreachable!(),
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
@@ -214,6 +229,7 @@ impl Emitter {
                         TypeKind::I64 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
                         TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
                         TypeKind::Array { .. } => panic!("cannot print array"),
+                        TypeKind::Pointer { .. } => write!(self.output, "\tprintf(\"%zu\\n\", ")?,
                     }
                 } else {
                     write!(self.output, "{}(", name)?;
@@ -244,6 +260,7 @@ impl Emitter {
 
     fn emit_preamble(&mut self) -> Result<(), Error> {
         writeln!(self.output, "#include <stdbool.h>")?;
+        writeln!(self.output, "#include <stdio.h>")?;
         Ok(())
     }
 }

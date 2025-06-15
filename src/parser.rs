@@ -53,6 +53,13 @@ pub enum BinaryOp {
     Assign,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum UnaryOp {
+    Ref,
+    Deref,
+    // Neg,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExpressionKind {
     BoolLiteral(bool),
@@ -64,6 +71,10 @@ pub enum ExpressionKind {
         left: Box<Expression>,
         op: BinaryOp,
         right: Box<Expression>,
+    },
+    Unary {
+        operator: UnaryOp,
+        operand: Box<Expression>,
     },
     FunctionCall {
         identifier: Token,
@@ -83,9 +94,10 @@ pub struct Expression {
 
 #[derive(Debug, Clone)]
 pub enum TypeExpression {
-    Simple(Token), //i64, bool, Struct etc
+    Simple(Token),                          //i64, bool, Struct etc
     Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
-                   //Slice(Box<TypeExpression>)
+    Pointer(Token, Box<TypeExpression>),
+    //Slice(Box<TypeExpression>)
 }
 
 impl TypeExpression {
@@ -94,6 +106,9 @@ impl TypeExpression {
             TypeExpression::Simple(token) => token.span,
             TypeExpression::Array(open_square, _, element_type) => {
                 Span::from_to(open_square.span, element_type.span())
+            }
+            TypeExpression::Pointer(star, reference_type) => {
+                Span::from_to(star.span, reference_type.span())
             }
         }
     }
@@ -112,6 +127,10 @@ impl Expression {
                 op: _op,
                 right,
             } => left.is_lvalue() && right.is_lvalue(),
+            ExpressionKind::Unary {
+                operator: _op,
+                operand,
+            } => operand.is_lvalue(),
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
         }
@@ -352,10 +371,12 @@ impl<'src> Parser<'src> {
                     Box::new(element_type),
                 ))
             }
-            TokenKind::Star => Err(Diagnostic {
-                message: "pointers are not yet implemented".to_string(),
-                span: self.peek().span,
-            }),
+            TokenKind::Star => {
+                let star = self.expect(TokenKind::Star)?;
+                let reference_type = self.parse_type_expression()?;
+
+                Ok(TypeExpression::Pointer(star, Box::new(reference_type)))
+            }
             _ => Err(Diagnostic {
                 message: format!("expected identifier but got {:?}", self.peek().kind),
                 span: self.peek().span,
@@ -381,7 +402,28 @@ impl<'src> Parser<'src> {
         &mut self,
         parent_precedence: i64,
     ) -> Result<Expression, Diagnostic> {
-        let left = self.parse_primary_expression()?;
+        let token = self.peek();
+        let left = if let Some(op) = Self::get_unary_op(token.kind) {
+            let precedence = Self::get_unary_precedence(op);
+            if precedence > parent_precedence {
+                let unary_operator = self.next()?; //consume the operator
+
+                let operand = self.parse_binary_expression(precedence)?;
+
+                Expression {
+                    span: Span::from_to(unary_operator.span, operand.span),
+                    kind: ExpressionKind::Unary {
+                        operator: op,
+                        operand: Box::new(operand),
+                    },
+                }
+            } else {
+                self.parse_primary_expression()?
+            }
+        } else {
+            self.parse_primary_expression()?
+        };
+
         self.parse_binary_expression_right(parent_precedence, left)
     }
 
@@ -561,6 +603,20 @@ impl<'src> Parser<'src> {
             TokenKind::OpenAngle => Some(BinaryOp::Lt),
             TokenKind::CloseAngle => Some(BinaryOp::Gt),
             TokenKind::Equals => Some(BinaryOp::Assign),
+            _ => None,
+        }
+    }
+
+    fn get_unary_precedence(op: UnaryOp) -> i64 {
+        match op {
+            UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+        }
+    }
+
+    fn get_unary_op(kind: TokenKind) -> Option<UnaryOp> {
+        match kind {
+            TokenKind::Ampersand => Some(UnaryOp::Ref),
+            TokenKind::Star => Some(UnaryOp::Deref),
             _ => None,
         }
     }
