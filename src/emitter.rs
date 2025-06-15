@@ -192,6 +192,7 @@ impl Emitter {
             }
             CheckedExpressionKind::Unary { operator, operand } => {
                 match operator {
+                    CheckedUnaryOp::Mut { .. } => {}
                     CheckedUnaryOp::Ref { .. } => write!(self.output, " &")?,
                     CheckedUnaryOp::Deref { .. } => write!(self.output, " *")?,
                 }

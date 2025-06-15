@@ -1,5 +1,5 @@
-foo(p: mut *i64): void {
-    *p = 5;
+ptr_set(p: mut *i64, val: i64): void {
+    *p = val;
 }
 
 print_pointer(p: *i64): void {
@@ -11,7 +11,7 @@ main(): void {
     ptr: *i64 = &x;
 
     print_pointer(ptr);
-    foo(ptr);
+    ptr_set(mut ptr, 5);
     print_pointer(ptr);
 
     print(x);

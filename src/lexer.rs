@@ -91,13 +91,13 @@ impl<'src> Lexer<'src> {
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
                     self.cursor += 1;
-                    Err(Diagnostic {
-                        message: format!("Unexpected character '{}'", c),
-                        span: Span {
+                    Err(Diagnostic::new(
+                        format!("Unexpected character '{}'", c),
+                        Span {
                             start: self.cursor - 1,
                             length: 1,
                         },
-                    })
+                    ))
                 }
             };
         }

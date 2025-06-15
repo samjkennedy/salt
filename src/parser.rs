@@ -57,6 +57,7 @@ pub enum BinaryOp {
 pub enum UnaryOp {
     Ref,
     Deref,
+    Mut,
     // Neg,
 }
 
@@ -357,6 +358,7 @@ impl<'src> Parser<'src> {
                     //TODO: the diagnostics get a bit mangled after this
                     Err(Diagnostic {
                         message: "only integer literals allow in array size".to_string(),
+                        hint: None,
                         span: self.current.span,
                     })
                 }?;
@@ -379,6 +381,7 @@ impl<'src> Parser<'src> {
             }
             _ => Err(Diagnostic {
                 message: format!("expected identifier but got {:?}", self.peek().kind),
+                hint: None,
                 span: self.peek().span,
             }),
         }
@@ -438,6 +441,7 @@ impl<'src> Parser<'src> {
                 if !left.is_lvalue() && op == BinaryOp::Assign {
                     return Err(Diagnostic {
                         message: format!("invalid left hand operand {:?}", left.kind),
+                        hint: None,
                         span: left.span,
                     });
                 }
@@ -523,6 +527,7 @@ impl<'src> Parser<'src> {
                 self.lexer.next()?;
                 Err(Diagnostic {
                     message: format!("parsing {:?} is not yet implemented", token.kind),
+                    hint: None,
                     span: token.span,
                 })
             }
@@ -609,12 +614,13 @@ impl<'src> Parser<'src> {
 
     fn get_unary_precedence(op: UnaryOp) -> i64 {
         match op {
-            UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+            UnaryOp::Mut | UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
         }
     }
 
     fn get_unary_op(kind: TokenKind) -> Option<UnaryOp> {
         match kind {
+            TokenKind::MutKeyword => Some(UnaryOp::Mut),
             TokenKind::Ampersand => Some(UnaryOp::Ref),
             TokenKind::Star => Some(UnaryOp::Deref),
             _ => None,
@@ -628,6 +634,7 @@ impl<'src> Parser<'src> {
         }
         Err(Diagnostic {
             message: format!("expected {:?} but got {:?}", expected, token.kind),
+            hint: None,
             span: token.span,
         })
     }
@@ -639,6 +646,7 @@ impl<'src> Parser<'src> {
         }
         Err(Diagnostic {
             message: format!("expected identifier, but got {:?}", token.kind),
+            hint: None,
             span: token.span,
         })
     }

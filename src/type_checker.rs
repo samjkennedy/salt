@@ -101,6 +101,7 @@ impl CheckedBinaryOp {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedUnaryOp {
+    Mut { result: TypeKind },
     Ref { result: TypeKind },
     Deref { result: TypeKind },
 }
@@ -108,6 +109,7 @@ pub enum CheckedUnaryOp {
 impl CheckedUnaryOp {
     fn get_result_type(&self) -> TypeKind {
         match self {
+            CheckedUnaryOp::Mut { result } => result.clone(),
             CheckedUnaryOp::Ref { result } => result.clone(),
             CheckedUnaryOp::Deref { result } => result.clone(),
         }
@@ -176,6 +178,12 @@ pub enum CheckedExpressionKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+struct FunctionParam {
+    type_kind: TypeKind,
+    mutable: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum ScopedIdentifier {
     Variable {
         name: String,
@@ -185,7 +193,7 @@ enum ScopedIdentifier {
     Function {
         return_type: TypeKind,
         name: String,
-        param_types: Vec<TypeKind>,
+        params: Vec<FunctionParam>,
     },
 }
 
@@ -200,7 +208,10 @@ impl Scope {
             identifiers: vec![ScopedIdentifier::Function {
                 return_type: TypeKind::Void,
                 name: "print".to_string(),
-                param_types: vec![TypeKind::Any], //TODO: varargs
+                params: vec![FunctionParam {
+                    type_kind: TypeKind::Any,
+                    mutable: false,
+                }], //TODO: varargs
             }],
             return_context,
         }
@@ -216,6 +227,7 @@ impl Scope {
                 ScopedIdentifier::Function { name, .. }
                 | ScopedIdentifier::Variable { name, .. } => Err(Diagnostic {
                     message: format!("{} already declared in scope", name),
+                    hint: None,
                     span,
                 }),
             };
@@ -377,6 +389,7 @@ impl<'src> TypeChecker<'src> {
                         TypeKind::Void => {
                             return Err(Diagnostic {
                                 message: "cannot return a value from a void function".to_string(),
+                                hint: None,
                                 span: expr_span,
                             })
                         }
@@ -395,6 +408,7 @@ impl<'src> TypeChecker<'src> {
                     TypeKind::Void => Ok(CheckedStatement::Return { expression: None }),
                     expected => Err(Diagnostic {
                         message: format!("expected return value of `{}`", expected),
+                        hint: None,
                         span: statement.span,
                     }),
                 },
@@ -417,7 +431,7 @@ impl<'src> TypeChecker<'src> {
         let return_type_kind = self.bind_type_kind(return_type)?;
 
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
-        let mut param_types: Vec<TypeKind> = Vec::new();
+        let mut params: Vec<FunctionParam> = Vec::new();
         for parameter in parameters {
             if let StatementKind::Parameter {
                 name_token,
@@ -439,7 +453,10 @@ impl<'src> TypeChecker<'src> {
                     type_kind: type_kind.clone(),
                     name: name_token.text,
                 });
-                param_types.push(type_kind);
+                params.push(FunctionParam {
+                    type_kind,
+                    mutable: mut_keyword.is_some(),
+                });
             } else {
                 unreachable!()
             }
@@ -452,7 +469,7 @@ impl<'src> TypeChecker<'src> {
                 ScopedIdentifier::Function {
                     return_type: return_type_kind.clone(),
                     name: name.clone(),
-                    param_types,
+                    params,
                 },
                 return_type_span,
             )?;
@@ -464,6 +481,7 @@ impl<'src> TypeChecker<'src> {
         if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
             return Err(Diagnostic {
                 message: "not all branches return".to_string(),
+                hint: None,
                 span: name_token.span,
             });
         }
@@ -595,8 +613,7 @@ impl<'src> TypeChecker<'src> {
             ExpressionKind::Unary { operator, operand } => {
                 let checked_operand = self.check_expr(*operand)?;
 
-                let checked_op =
-                    Self::get_unary_op(&operator, checked_operand.type_kind.clone(), expr.span)?;
+                let checked_op = Self::get_unary_op(&operator, &checked_operand, expr.span)?;
 
                 Ok(CheckedExpression {
                     type_kind: checked_op.get_result_type(),
@@ -622,6 +639,7 @@ impl<'src> TypeChecker<'src> {
                     if !checked_left.is_lvalue() {
                         return Err(Diagnostic {
                             message: "cannot assign to immutable value".to_string(),
+                            hint: None,
                             span: left_span,
                         });
                     }
@@ -646,12 +664,13 @@ impl<'src> TypeChecker<'src> {
                         if let ScopedIdentifier::Function {
                             return_type,
                             name: func_name,
-                            param_types,
+                            params,
                         } = function
                         {
-                            if arguments.len() != param_types.len() {
+                            if arguments.len() != params.len() {
                                 return Err(Diagnostic {
-                                    message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, param_types.len(), arguments.len()),
+                                    message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, params.len(), arguments.len()),
+                                    hint: None,
                                     span: expr.span,
                                 });
                             }
@@ -662,11 +681,34 @@ impl<'src> TypeChecker<'src> {
                                 let arg_span = arg.span;
                                 let checked_arg = self.check_expr(arg)?;
 
+                                let param = &params[i];
                                 Self::expect_type(
-                                    &param_types[i],
+                                    &param.type_kind,
                                     &checked_arg.type_kind,
                                     arg_span,
                                 )?;
+
+                                if let CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Mut { .. },
+                                    ..
+                                } = &checked_arg.kind
+                                {
+                                    if !param.mutable {
+                                        return Err(Diagnostic::with_hint(
+                                            "passing mutable reference to non-mutable parameter"
+                                                .to_string(),
+                                            "remove the `mut`".to_string(),
+                                            arg_span,
+                                        ));
+                                    }
+                                } else if param.mutable {
+                                    return Err(Diagnostic {
+                                        message: "passing constant reference to mutable parameter"
+                                            .to_string(),
+                                        hint: Some("add `mut` before the parameter".to_string()),
+                                        span: arg_span,
+                                    });
+                                }
 
                                 checked_args.push(checked_arg);
                             }
@@ -683,12 +725,14 @@ impl<'src> TypeChecker<'src> {
                         } else {
                             Err(Diagnostic {
                                 message: format!("cannot call `{}` as a function", name),
+                                hint: None,
                                 span: expr.span,
                             })
                         }
                     }
                     None => Err(Diagnostic {
                         message: format!("no such function `{}` in scope", name),
+                        hint: None,
                         span: expr.span,
                     }),
                 }
@@ -711,6 +755,7 @@ impl<'src> TypeChecker<'src> {
                     },
                     None => Err(Diagnostic {
                         message: format!("no such variable `{}` in scope", name),
+                        hint: None,
                         span: expr.span,
                     }),
                 }
@@ -738,6 +783,7 @@ impl<'src> TypeChecker<'src> {
                 } else {
                     Err(Diagnostic {
                         message: format!("cannot index type `{}`", checked_array.type_kind),
+                        hint: None,
                         span: expr.span,
                     })
                 }
@@ -747,24 +793,52 @@ impl<'src> TypeChecker<'src> {
 
     fn get_unary_op(
         op: &UnaryOp,
-        operand: TypeKind,
+        operand: &CheckedExpression,
         span: Span,
     ) -> Result<CheckedUnaryOp, Diagnostic> {
         match op {
+            UnaryOp::Mut => {
+                if !operand.is_lvalue() {
+                    return Err(Diagnostic {
+                        message: "cannot make a mutable reference to non-assignable value"
+                            .to_string(),
+                        hint: Some("remove the `mut`".to_string()),
+                        span,
+                    });
+                }
+                if let TypeKind::Pointer { .. } = &operand.type_kind {
+                    Ok(CheckedUnaryOp::Mut {
+                        result: operand.type_kind.clone(),
+                    })
+                } else {
+                    Err(Diagnostic {
+                        message: format!(
+                            "cannot make a mutable reference to non-pointer type `{}`",
+                            operand.type_kind
+                        ),
+                        hint: Some("remove the `mut`".to_string()),
+                        span,
+                    })
+                }
+            }
             UnaryOp::Ref => Ok(CheckedUnaryOp::Ref {
                 result: TypeKind::Pointer {
-                    reference_type: Box::new(operand),
+                    reference_type: Box::new(operand.type_kind.clone()),
                 },
             }),
 
             UnaryOp::Deref => {
-                if let TypeKind::Pointer { reference_type } = operand {
+                if let TypeKind::Pointer { reference_type } = &operand.type_kind {
                     Ok(CheckedUnaryOp::Deref {
-                        result: *reference_type,
+                        result: *reference_type.clone(),
                     })
                 } else {
                     Err(Diagnostic {
-                        message: format!("cannot dereference non-pointer type {}", operand),
+                        message: format!(
+                            "cannot dereference non-pointer type `{}`",
+                            operand.type_kind
+                        ),
+                        hint: None,
                         span,
                     })
                 }
@@ -832,6 +906,7 @@ impl<'src> TypeChecker<'src> {
                             "cannot assign `{}` to variable of type `{}`",
                             right, left
                         ),
+                        hint: None,
                         span,
                     });
                 }
@@ -854,6 +929,7 @@ impl<'src> TypeChecker<'src> {
                     "invalid binary operation, {} and {} cannot be applied to {:?}",
                     left, right, result
                 ),
+                hint: None,
                 span,
             }),
         }
@@ -870,6 +946,7 @@ impl<'src> TypeChecker<'src> {
                     "type mismatch, expected `{}` but got `{}`",
                     expected, actual
                 ),
+                hint: None,
                 span,
             });
         }
@@ -886,6 +963,7 @@ impl<'src> TypeChecker<'src> {
                 "f32" => Ok(TypeKind::F32),
                 _ => Err(Diagnostic {
                     message: format!("no such type {} in scope", token.text),
+                    hint: None,
                     span: type_expression_span,
                 }),
             },
