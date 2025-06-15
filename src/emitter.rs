@@ -115,6 +115,18 @@ impl Emitter {
                 }
                 writeln!(self.output, ";")
             }
+            CheckedStatement::Struct { name, fields } => {
+                writeln!(self.output, "typedef struct {{")?;
+                for field in fields {
+                    if let CheckedStatement::Parameter { type_kind, name } = field {
+                        self.emit_var_decl_type(type_kind, name)?;
+                        writeln!(self.output, ";")?;
+                    } else {
+                        unreachable!()
+                    }
+                }
+                writeln!(self.output, "}} {};", name)
+            }
         }
     }
 
@@ -133,6 +145,7 @@ impl Emitter {
                 write!(self.output, "[]")?
             }
             TypeKind::Pointer { reference_type } => write!(self.output, "{}*", reference_type)?,
+            TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
         }
         Ok(())
     }
@@ -142,8 +155,8 @@ impl Emitter {
             TypeKind::Any => unreachable!(),
             TypeKind::Void => write!(self.output, "void {}", name)?, //TODO void variables? Remove this
             TypeKind::Bool => write!(self.output, "bool {}", name)?,
-            TypeKind::I64 => write!(self.output, "long  {}", name)?,
-            TypeKind::F32 => write!(self.output, "float   {}", name)?,
+            TypeKind::I64 => write!(self.output, "long {}", name)?,
+            TypeKind::F32 => write!(self.output, "float {}", name)?,
             TypeKind::Array { size, element_type } => {
                 self.emit_type(element_type)?;
                 write!(self.output, " {}[{}]", name, size)?;
@@ -152,6 +165,9 @@ impl Emitter {
                 self.emit_type(reference_type)?;
                 write!(self.output, " *{}", name)?
             }
+            TypeKind::Struct {
+                name: struct_name, ..
+            } => write!(self.output, "{} {}", struct_name, name)?,
         }
         Ok(())
     }
@@ -221,6 +237,7 @@ impl Emitter {
                     match arguments[0].type_kind {
                         TypeKind::Any => unreachable!(),
                         TypeKind::Void => panic!("cannot print void"),
+                        TypeKind::Struct { .. } => panic!("cannot print structs"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
                             self.emit_expr(&arguments[0])?;

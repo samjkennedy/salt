@@ -29,6 +29,7 @@ pub enum TokenKind {
     MutKeyword,
     IfKeyword,
     ElseKeyword,
+    StructKeyword,
     EndOfFile,
 }
 
@@ -223,6 +224,11 @@ impl<'src> Lexer<'src> {
             },
             "mut" => Token {
                 kind: TokenKind::MutKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "struct" => Token {
+                kind: TokenKind::StructKeyword,
                 span,
                 text: value.to_owned(),
             },

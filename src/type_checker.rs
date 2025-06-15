@@ -5,7 +5,7 @@ use crate::parser::{
 };
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     Block(Vec<CheckedStatement>),
@@ -36,6 +36,10 @@ pub enum CheckedStatement {
     Return {
         expression: Option<CheckedExpression>,
     },
+    Struct {
+        name: String,
+        fields: Vec<CheckedStatement>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -51,6 +55,10 @@ pub enum TypeKind {
     },
     Pointer {
         reference_type: Box<TypeKind>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<CheckedStatement>,
     },
 }
 
@@ -68,6 +76,7 @@ impl Display for TypeKind {
             TypeKind::Pointer { reference_type } => {
                 write!(f, "*{}", reference_type)
             }
+            TypeKind::Struct { name, .. } => write!(f, "{}", name),
         }
     }
 }
@@ -116,7 +125,7 @@ impl CheckedUnaryOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CheckedExpression {
     pub kind: CheckedExpressionKind,
     pub type_kind: TypeKind,
@@ -148,7 +157,7 @@ impl CheckedExpression {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
@@ -195,6 +204,9 @@ enum ScopedIdentifier {
         name: String,
         params: Vec<FunctionParam>,
     },
+    Type {
+        type_kind: TypeKind,
+    },
 }
 
 struct Scope {
@@ -225,11 +237,14 @@ impl Scope {
         if self.identifiers.contains(&identifier) {
             return match identifier {
                 ScopedIdentifier::Function { name, .. }
-                | ScopedIdentifier::Variable { name, .. } => Err(Diagnostic {
-                    message: format!("{} already declared in scope", name),
-                    hint: None,
+                | ScopedIdentifier::Variable { name, .. } => Err(Diagnostic::new(
+                    format!("{} already declared in scope", name),
                     span,
-                }),
+                )),
+                ScopedIdentifier::Type { type_kind } => Err(Diagnostic::new(
+                    format!("type `{}` already declared in scope", type_kind.to_string()),
+                    span,
+                )),
             };
         }
         self.identifiers.push(identifier);
@@ -246,6 +261,12 @@ impl Scope {
                     name: ident_name, ..
                 } => {
                     if name == ident_name {
+                        return Some(ident.clone());
+                    }
+                }
+                ScopedIdentifier::Type { type_kind } => {
+                    if name == type_kind.to_string() {
+                        //TODO: this is a bit wonky, could store a type id?
                         return Some(ident.clone());
                     }
                 }
@@ -329,6 +350,49 @@ impl<'src> TypeChecker<'src> {
                 parameters,
                 body,
             } => self.check_function_definition(return_type, name, parameters, body),
+            StatementKind::Struct { identifier, fields } => {
+                let mut checked_fields: Vec<CheckedStatement> = Vec::new();
+                let mut params: Vec<FunctionParam> = Vec::new();
+                for field in fields {
+                    if let StatementKind::Parameter {
+                        name_token,
+                        mut_keyword,
+                        type_expression,
+                    } = field.kind
+                    {
+                        let type_kind = self.bind_type_kind(type_expression)?;
+
+                        checked_fields.push(CheckedStatement::Parameter {
+                            type_kind: type_kind.clone(),
+                            name: name_token.text,
+                        });
+                        params.push(FunctionParam {
+                            type_kind,
+                            mutable: mut_keyword.is_some(),
+                        });
+                    } else {
+                        unreachable!()
+                    }
+                }
+
+                //Have to clone, oh well
+                let struct_type = TypeKind::Struct {
+                    name: identifier.text.clone(),
+                    fields: checked_fields.clone(),
+                };
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Type {
+                        type_kind: struct_type,
+                    },
+                    identifier.span,
+                )?;
+
+                Ok(CheckedStatement::Struct {
+                    name: identifier.text,
+                    fields: checked_fields,
+                })
+            }
             StatementKind::VariableDeclaration {
                 type_expression,
                 identifier,
@@ -504,7 +568,7 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_return(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } => false,
+            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -751,6 +815,9 @@ impl<'src> TypeChecker<'src> {
                         }),
                         ScopedIdentifier::Function { .. } => {
                             panic!("function pointers are not yet implemented")
+                        }
+                        ScopedIdentifier::Type { .. } => {
+                            panic!("types as values are not yet implemented")
                         }
                     },
                     None => Err(Diagnostic {
