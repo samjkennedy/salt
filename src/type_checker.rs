@@ -5,7 +5,7 @@ use crate::parser::{
 };
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     Block(Vec<CheckedStatement>),
@@ -36,6 +36,10 @@ pub enum CheckedStatement {
     Return {
         expression: Option<CheckedExpression>,
     },
+    Struct {
+        name: String,
+        fields: Vec<CheckedStatement>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -51,6 +55,10 @@ pub enum TypeKind {
     },
     Pointer {
         reference_type: Box<TypeKind>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<CheckedStatement>,
     },
 }
 
@@ -68,6 +76,7 @@ impl Display for TypeKind {
             TypeKind::Pointer { reference_type } => {
                 write!(f, "*{}", reference_type)
             }
+            TypeKind::Struct { name, .. } => write!(f, "{}", name),
         }
     }
 }
@@ -116,7 +125,7 @@ impl CheckedUnaryOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CheckedExpression {
     pub kind: CheckedExpressionKind,
     pub type_kind: TypeKind,
@@ -129,6 +138,7 @@ impl CheckedExpression {
             CheckedExpressionKind::IntLiteral(_) => false,
             CheckedExpressionKind::Parenthesized(_) => false,
             CheckedExpressionKind::ArrayLiteral(_) => false,
+            CheckedExpressionKind::StructLiteral { .. } => false,
             CheckedExpressionKind::Binary {
                 left,
                 operator: _operator,
@@ -144,11 +154,12 @@ impl CheckedExpression {
                 mutable,
             } => *mutable,
             CheckedExpressionKind::ArrayIndex { .. } => true,
+            CheckedExpressionKind::MemberAccess { .. } => true,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
@@ -175,6 +186,15 @@ pub enum CheckedExpressionKind {
         array: Box<CheckedExpression>,
         index: Box<CheckedExpression>,
     },
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, CheckedExpression)>,
+        struct_type: TypeKind,
+    },
+    MemberAccess {
+        expression: Box<CheckedExpression>,
+        member: String,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -194,6 +214,9 @@ enum ScopedIdentifier {
         return_type: TypeKind,
         name: String,
         params: Vec<FunctionParam>,
+    },
+    Type {
+        type_kind: TypeKind,
     },
 }
 
@@ -225,11 +248,14 @@ impl Scope {
         if self.identifiers.contains(&identifier) {
             return match identifier {
                 ScopedIdentifier::Function { name, .. }
-                | ScopedIdentifier::Variable { name, .. } => Err(Diagnostic {
-                    message: format!("{} already declared in scope", name),
-                    hint: None,
+                | ScopedIdentifier::Variable { name, .. } => Err(Diagnostic::new(
+                    format!("{} already declared in scope", name),
                     span,
-                }),
+                )),
+                ScopedIdentifier::Type { type_kind } => Err(Diagnostic::new(
+                    format!("type `{}` already declared in scope", type_kind),
+                    span,
+                )),
             };
         }
         self.identifiers.push(identifier);
@@ -246,6 +272,12 @@ impl Scope {
                     name: ident_name, ..
                 } => {
                     if name == ident_name {
+                        return Some(ident.clone());
+                    }
+                }
+                ScopedIdentifier::Type { type_kind } => {
+                    if name == type_kind.to_string() {
+                        //TODO: this is a bit wonky, could store a type id?
                         return Some(ident.clone());
                     }
                 }
@@ -329,6 +361,51 @@ impl<'src> TypeChecker<'src> {
                 parameters,
                 body,
             } => self.check_function_definition(return_type, name, parameters, body),
+            StatementKind::Struct { identifier, fields } => {
+                let mut checked_fields: Vec<CheckedStatement> = Vec::new();
+                let mut params: Vec<FunctionParam> = Vec::new();
+                for field in fields {
+                    if let StatementKind::Parameter {
+                        name_token,
+                        mut_keyword,
+                        type_expression,
+                    } = field.kind
+                    {
+                        let type_kind = self.bind_type_kind(type_expression)?;
+
+                        //TODO warn/error if mut is used with non-pointer types
+
+                        checked_fields.push(CheckedStatement::Parameter {
+                            type_kind: type_kind.clone(),
+                            name: name_token.text,
+                        });
+                        params.push(FunctionParam {
+                            type_kind,
+                            mutable: mut_keyword.is_some(),
+                        });
+                    } else {
+                        unreachable!()
+                    }
+                }
+
+                //Have to clone, oh well
+                let struct_type = TypeKind::Struct {
+                    name: identifier.text.clone(),
+                    fields: checked_fields.clone(),
+                };
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Type {
+                        type_kind: struct_type,
+                    },
+                    identifier.span,
+                )?;
+
+                Ok(CheckedStatement::Struct {
+                    name: identifier.text,
+                    fields: checked_fields,
+                })
+            }
             StatementKind::VariableDeclaration {
                 type_expression,
                 identifier,
@@ -430,6 +507,8 @@ impl<'src> TypeChecker<'src> {
         let return_type_span = return_type.span();
         let return_type_kind = self.bind_type_kind(return_type)?;
 
+        self.scope.push(Scope::new(self.get_return_context()));
+
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
         let mut params: Vec<FunctionParam> = Vec::new();
         for parameter in parameters {
@@ -462,6 +541,25 @@ impl<'src> TypeChecker<'src> {
             }
         }
 
+        //TODO: declare the function in its own scope to allow recursion
+        // self.scope
+        //     .last_mut()
+        //     .expect("missing global scope")
+        //     .try_declare_identifier(
+        //         ScopedIdentifier::Function {
+        //             return_type: return_type_kind.clone(),
+        //             name: name.clone(),
+        //             params,
+        //         },
+        //         return_type_span,
+        //     )?;
+
+        self.scope.push(Scope::new(return_type_kind.clone()));
+        let checked_body = self.check_statement(*body)?;
+        self.scope.pop();
+
+        self.scope.pop();
+
         self.scope
             .last_mut()
             .expect("missing global scope")
@@ -473,10 +571,6 @@ impl<'src> TypeChecker<'src> {
                 },
                 return_type_span,
             )?;
-
-        self.scope.push(Scope::new(return_type_kind.clone()));
-        let checked_body = self.check_statement(*body)?;
-        self.scope.pop();
 
         if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
             return Err(Diagnostic {
@@ -504,7 +598,7 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_return(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } => false,
+            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -668,11 +762,10 @@ impl<'src> TypeChecker<'src> {
                         } = function
                         {
                             if arguments.len() != params.len() {
-                                return Err(Diagnostic {
-                                    message: format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, params.len(), arguments.len()),
-                                    hint: None,
-                                    span: expr.span,
-                                });
+                                return Err(Diagnostic::new(
+                                    format!("incorrect number of arguments for function `{}`, expected {} but got {}", func_name, params.len(), arguments.len()),
+                                    expr.span,
+                                ));
                             }
 
                             let mut checked_args: Vec<CheckedExpression> = Vec::new();
@@ -713,8 +806,6 @@ impl<'src> TypeChecker<'src> {
                                 checked_args.push(checked_arg);
                             }
 
-                            //TODO: validate that args match function params
-
                             Ok(CheckedExpression {
                                 kind: CheckedExpressionKind::FunctionCall {
                                     name: func_name,
@@ -752,6 +843,9 @@ impl<'src> TypeChecker<'src> {
                         ScopedIdentifier::Function { .. } => {
                             panic!("function pointers are not yet implemented")
                         }
+                        ScopedIdentifier::Type { .. } => {
+                            panic!("types as values are not yet implemented")
+                        }
                     },
                     None => Err(Diagnostic {
                         message: format!("no such variable `{}` in scope", name),
@@ -788,6 +882,179 @@ impl<'src> TypeChecker<'src> {
                     })
                 }
             }
+            ExpressionKind::StructLiteral {
+                identifier,
+                fields: arguments,
+            } => {
+                if let Some(ScopedIdentifier::Type { type_kind }) =
+                    self.get_identifier(&identifier.text)
+                {
+                    if let TypeKind::Struct {
+                        name: struct_name,
+                        fields: struct_fields,
+                    } = &type_kind
+                    {
+                        let mut checked_fields = Vec::new();
+                        let mut seen_fields = std::collections::HashSet::new();
+
+                        // Map struct field names for lookup
+                        let struct_field_map: std::collections::HashMap<_, _> = struct_fields
+                            .iter()
+                            .filter_map(|f| {
+                                if let CheckedStatement::Parameter { name, type_kind } = f {
+                                    Some((name.clone(), type_kind.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        for (field_name_token, arg_expr) in arguments {
+                            let field_name = &field_name_token.text;
+
+                            if seen_fields.contains(field_name) {
+                                return Err(Diagnostic::new(
+                                    format!("duplicate field `{}` in struct literal", field_name),
+                                    field_name_token.span,
+                                ));
+                            }
+
+                            seen_fields.insert(field_name.clone());
+
+                            let expected_type = struct_field_map.get(field_name);
+                            let arg_expr_span = arg_expr.span;
+                            let checked_expr = self.check_expr(arg_expr)?;
+
+                            match expected_type {
+                                Some(expected) => {
+                                    Self::expect_type(
+                                        expected,
+                                        &checked_expr.type_kind,
+                                        arg_expr_span,
+                                    )?;
+                                    checked_fields.push((field_name.clone(), checked_expr));
+                                }
+                                None => {
+                                    return Err(Diagnostic::new(
+                                        format!(
+                                            "unknown field `{}` for struct `{}`",
+                                            field_name, struct_name
+                                        ),
+                                        field_name_token.span,
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Check for missing fields
+                        for f in struct_fields {
+                            if let CheckedStatement::Parameter { name, .. } = f {
+                                if !seen_fields.contains(name) {
+                                    return Err(Diagnostic::new(
+                                        format!(
+                                            "missing field `{}` in struct literal for `{}`",
+                                            name, struct_name
+                                        ),
+                                        expr.span,
+                                    ));
+                                }
+                            }
+                        }
+
+                        Ok(CheckedExpression {
+                            kind: CheckedExpressionKind::StructLiteral {
+                                name: struct_name.clone(),
+                                fields: checked_fields,
+                                struct_type: type_kind.clone(),
+                            },
+                            type_kind,
+                        })
+                    } else {
+                        Err(Diagnostic::new(
+                            format!("no such struct type `{}` in scope", identifier.text),
+                            identifier.span,
+                        ))
+                    }
+                } else {
+                    Err(Diagnostic::new(
+                        format!("no such struct type `{}` in scope", identifier.text),
+                        identifier.span,
+                    ))
+                }
+            }
+            ExpressionKind::MemberAccess { expression, member } => {
+                let expr_span = expr.span;
+                let checked_expression = self.check_expr(*expression)?;
+                let expression_type = &checked_expression.type_kind.clone();
+
+                Self::check_member_access(&member, checked_expression, expression_type, expr_span)
+            }
+        }
+    }
+
+    fn check_member_access(
+        member: &Token,
+        checked_expression: CheckedExpression,
+        expression_type: &TypeKind,
+        expr_span: Span,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        match expression_type {
+            TypeKind::Pointer { reference_type } => {
+                //Unwrap the pointer
+                Self::check_member_access(member, checked_expression, reference_type, expr_span)
+            }
+            TypeKind::Struct { fields, .. } => {
+                let mut field_names = Vec::new();
+                for field in fields {
+                    if let CheckedStatement::Parameter { type_kind, name } = field {
+                        field_names.push(name.clone());
+
+                        if name == &member.text {
+                            return Ok(CheckedExpression {
+                                kind: CheckedExpressionKind::MemberAccess {
+                                    expression: Box::new(checked_expression),
+                                    member: member.text.clone(),
+                                },
+                                type_kind: type_kind.clone(),
+                            });
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                }
+                Err(Diagnostic::with_hint(
+                    format!(
+                        "no such field `{}` on type `{}`",
+                        member.text, checked_expression.type_kind
+                    ),
+                    format!("available fields are: [{}]", field_names.join(", ")),
+                    expr_span,
+                ))
+            }
+            TypeKind::Array { size, .. } => {
+                if member.text == "len" {
+                    Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::IntLiteral(*size),
+                        type_kind: TypeKind::I64,
+                    })
+                } else {
+                    Err(Diagnostic::with_hint(
+                        format!(
+                            "no such field `{}` on type `{}`",
+                            member.text, checked_expression.type_kind
+                        ),
+                        "available fields are: [len]".to_string(),
+                        expr_span,
+                    ))
+                }
+            }
+            _ => Err(Diagnostic::new(
+                format!(
+                    "type `{}` does not have fields",
+                    checked_expression.type_kind
+                ),
+                expr_span,
+            )),
         }
     }
 
@@ -961,11 +1228,19 @@ impl<'src> TypeChecker<'src> {
                 "bool" => Ok(TypeKind::Bool),
                 "i64" => Ok(TypeKind::I64),
                 "f32" => Ok(TypeKind::F32),
-                _ => Err(Diagnostic {
-                    message: format!("no such type {} in scope", token.text),
-                    hint: None,
-                    span: type_expression_span,
-                }),
+                type_name => {
+                    if let Some(ScopedIdentifier::Type { type_kind }) =
+                        self.get_identifier(type_name)
+                    {
+                        Ok(type_kind)
+                    } else {
+                        Err(Diagnostic {
+                            message: format!("no such type `{}` in scope", token.text),
+                            hint: None,
+                            span: type_expression_span,
+                        })
+                    }
+                }
             },
             TypeExpression::Array(_, size, element_type) => {
                 let element_type = self.bind_type_kind(*element_type)?;

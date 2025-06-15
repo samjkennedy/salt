@@ -22,6 +22,7 @@ pub enum TokenKind {
     Colon,
     Semicolon,
     Comma,
+    Dot,
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
@@ -29,6 +30,7 @@ pub enum TokenKind {
     MutKeyword,
     IfKeyword,
     ElseKeyword,
+    StructKeyword,
     EndOfFile,
 }
 
@@ -87,6 +89,7 @@ impl<'src> Lexer<'src> {
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
                 ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
+                '.' => Ok(self.make_token(TokenKind::Dot, ".".to_owned())),
                 '0'..='9' => Ok(self.lex_number()),
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
@@ -223,6 +226,11 @@ impl<'src> Lexer<'src> {
             },
             "mut" => Token {
                 kind: TokenKind::MutKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "struct" => Token {
+                kind: TokenKind::StructKeyword,
                 span,
                 text: value.to_owned(),
             },

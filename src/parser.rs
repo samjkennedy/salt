@@ -33,6 +33,10 @@ pub enum StatementKind {
         body: Box<Statement>,
         else_branch: Option<Box<Statement>>,
     },
+    Struct {
+        identifier: Token,
+        fields: Vec<Statement>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +72,10 @@ pub enum ExpressionKind {
     Variable(Token),
     Parenthesized(Box<Expression>),
     ArrayLiteral(Vec<Expression>),
+    StructLiteral {
+        identifier: Token,
+        fields: Vec<(Token, Expression)>,
+    },
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -84,6 +92,10 @@ pub enum ExpressionKind {
     ArrayIndex {
         array: Box<Expression>,
         index: Box<Expression>,
+    },
+    MemberAccess {
+        expression: Box<Expression>,
+        member: Token,
     },
 }
 
@@ -123,6 +135,7 @@ impl Expression {
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
             ExpressionKind::ArrayLiteral(_) => false,
+            ExpressionKind::StructLiteral { .. } => false,
             ExpressionKind::Binary {
                 left,
                 op: _op,
@@ -134,6 +147,7 @@ impl Expression {
             } => operand.is_lvalue(),
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
+            ExpressionKind::MemberAccess { .. } => true,
         }
     }
 }
@@ -167,38 +181,43 @@ impl<'src> Parser<'src> {
     pub fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
         match self.peek().kind {
             TokenKind::OpenCurly => {
-                let open_curly = self.expect(TokenKind::OpenCurly)?;
+                let open_curly = self.expect(&TokenKind::OpenCurly)?;
                 let mut statements = vec![];
 
                 while self.peek().kind != TokenKind::CloseCurly {
                     statements.push(self.parse_statement()?);
                 }
-                let close_curly = self.expect(TokenKind::CloseCurly)?;
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
 
                 Ok(Statement {
                     span: Span::from_to(open_curly.span, close_curly.span),
                     kind: StatementKind::Block(statements),
                 })
             }
+            TokenKind::StructKeyword => {
+                let struct_keyword = self.expect(&TokenKind::StructKeyword)?;
+                let identifier = self.expect_identifier()?;
 
+                self.expect(&TokenKind::OpenCurly)?;
+                let fields =
+                    self.parse_delimited_params(&TokenKind::Comma, &TokenKind::CloseCurly)?;
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Statement {
+                    span: Span::from_to(struct_keyword.span, close_curly.span),
+                    kind: StatementKind::Struct { identifier, fields },
+                })
+            }
             TokenKind::Identifier(_) if self.context == ParseContext::Global => {
                 let name = self.expect_identifier()?;
 
-                self.expect(TokenKind::OpenParen)?;
+                self.expect(&TokenKind::OpenParen)?;
+                let parameters: Vec<Statement> =
+                    self.parse_delimited_params(&TokenKind::Comma, &TokenKind::CloseParen)?;
+                self.expect(&TokenKind::CloseParen)?;
 
-                let mut parameters: Vec<Statement> = Vec::new();
-                while self.peek().kind != TokenKind::CloseParen {
-                    parameters.push(self.parse_parameter()?);
-
-                    if self.peek().kind != TokenKind::CloseParen {
-                        self.expect(TokenKind::Comma)?;
-                    }
-                }
-
-                self.expect(TokenKind::CloseParen)?;
-
-                //TODO: allow pure void functions to omit the type
-                self.expect(TokenKind::Colon)?;
+                //TODO: allow void functions to omit the type
+                self.expect(&TokenKind::Colon)?;
                 let return_type = self.parse_type_expression()?;
 
                 self.context = ParseContext::Function;
@@ -216,61 +235,82 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::Identifier(identifier) => {
-                let identifier = self.expect(TokenKind::Identifier(identifier))?;
+                let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 // This could be a variable declaration or expression
                 // Peek ahead to see if after the identifier we have a colon (variable declaration)
-                if let TokenKind::Colon = self.peek().kind {
-                    // Looks like a var decl to me
+                match self.peek().kind {
+                    TokenKind::Colon => {
+                        // Looks like a var decl to me
 
-                    //TODO: allow type inference
-                    self.expect(TokenKind::Colon)?;
-                    let type_expression = self.parse_type_expression()?;
+                        //TODO: allow type inference
+                        self.expect(&TokenKind::Colon)?;
+                        let type_expression = self.parse_type_expression()?;
 
-                    //TODO: decide how to handle RAII
-                    self.expect(TokenKind::Equals)?;
-                    let initialiser = self.parse_expression()?;
+                        //TODO: decide how to handle RAII
+                        self.expect(&TokenKind::Equals)?;
+                        let initialiser = self.parse_expression()?;
 
-                    let semicolon = self.expect(TokenKind::Semicolon)?;
+                        let semicolon = self.expect(&TokenKind::Semicolon)?;
 
-                    Ok(Statement {
-                        span: Span::from_to(identifier.span, semicolon.span),
-                        kind: StatementKind::VariableDeclaration {
-                            identifier,
-                            type_expression,
-                            initialiser,
-                        },
-                    })
-                } else {
-                    let expression = if self.peek().kind == TokenKind::OpenParen {
-                        self.parse_function_call(identifier)?
-                    } else if self.peek().kind == TokenKind::OpenSquare {
-                        //TODO: This is horrible and there needs to be a more general case solution to this
-                        let expr = Expression {
-                            span: identifier.span,
-                            kind: ExpressionKind::Variable(identifier),
-                        };
-                        let array_index = self.parse_array_index(expr)?;
-                        self.parse_binary_expression_right(0, array_index)?
-                    } else {
-                        self.parse_binary_expression_right(
-                            0,
-                            Expression {
+                        Ok(Statement {
+                            span: Span::from_to(identifier.span, semicolon.span),
+                            kind: StatementKind::VariableDeclaration {
+                                identifier,
+                                type_expression,
+                                initialiser,
+                            },
+                        })
+                    }
+                    _ => {
+                        let expression = if self.peek().kind == TokenKind::OpenParen {
+                            self.parse_function_call(identifier)?
+                        } else if self.peek().kind == TokenKind::OpenSquare {
+                            //TODO: This is horrible and there needs to be a more general case solution to this
+                            let expr = Expression {
                                 span: identifier.span,
                                 kind: ExpressionKind::Variable(identifier),
-                            },
-                        )?
-                    };
+                            };
+                            let array_index = self.parse_array_index(expr)?;
+                            self.parse_binary_expression_right(0, array_index)?
+                        } else if self.peek().kind == TokenKind::OpenCurly {
+                            todo!("struct literals!")
+                        } else if self.peek().kind == TokenKind::Dot {
+                            let expr = Expression {
+                                span: identifier.span,
+                                kind: ExpressionKind::Variable(identifier),
+                            };
+                            self.expect(&TokenKind::Dot)?;
+                            let identifier = self.expect_identifier()?;
 
-                    let semicolon = self.expect(TokenKind::Semicolon)?;
+                            let access = Expression {
+                                span: Span::from_to(expr.span, identifier.span),
+                                kind: ExpressionKind::MemberAccess {
+                                    expression: Box::new(expr),
+                                    member: identifier,
+                                },
+                            };
+                            self.parse_binary_expression_right(0, access)?
+                        } else {
+                            self.parse_binary_expression_right(
+                                0,
+                                Expression {
+                                    span: identifier.span,
+                                    kind: ExpressionKind::Variable(identifier),
+                                },
+                            )?
+                        };
 
-                    Ok(Statement {
-                        span: Span::from_to(expression.span, semicolon.span),
-                        kind: StatementKind::Expression(expression),
-                    })
+                        let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                        Ok(Statement {
+                            span: Span::from_to(expression.span, semicolon.span),
+                            kind: StatementKind::Expression(expression),
+                        })
+                    }
                 }
             }
             TokenKind::WhileKeyword => {
-                let while_keyword = self.expect(TokenKind::WhileKeyword)?;
+                let while_keyword = self.expect(&TokenKind::WhileKeyword)?;
                 let condition = self.parse_expression()?;
                 let body = self.parse_statement()?;
 
@@ -283,13 +323,13 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::IfKeyword => {
-                let if_keyword = self.expect(TokenKind::IfKeyword)?;
+                let if_keyword = self.expect(&TokenKind::IfKeyword)?;
                 let condition = self.parse_expression()?;
 
                 let body = self.parse_statement()?;
 
                 if self.peek().kind == TokenKind::ElseKeyword {
-                    self.expect(TokenKind::ElseKeyword)?;
+                    self.expect(&TokenKind::ElseKeyword)?;
                     let else_branch = self.parse_statement()?;
 
                     Ok(Statement {
@@ -312,10 +352,10 @@ impl<'src> Parser<'src> {
                 }
             }
             TokenKind::ReturnKeyword => {
-                let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
+                let return_keyword = self.expect(&TokenKind::ReturnKeyword)?;
 
                 if self.peek().kind == TokenKind::Semicolon {
-                    let semicolon = self.expect(TokenKind::Semicolon)?;
+                    let semicolon = self.expect(&TokenKind::Semicolon)?;
                     return Ok(Statement {
                         span: Span::from_to(return_keyword.span, semicolon.span),
                         kind: StatementKind::Return { expression: None },
@@ -323,7 +363,7 @@ impl<'src> Parser<'src> {
                 }
 
                 let expr = self.parse_expression()?;
-                let semicolon = self.expect(TokenKind::Semicolon)?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
 
                 Ok(Statement {
                     span: Span::from_to(return_keyword.span, semicolon.span),
@@ -334,7 +374,7 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 let expr = self.parse_expression()?;
-                let semi = self.expect(TokenKind::Semicolon)?;
+                let semi = self.expect(&TokenKind::Semicolon)?;
 
                 Ok(Statement {
                     span: Span::from_to(expr.span, semi.span),
@@ -344,14 +384,30 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn parse_delimited_params(
+        &mut self,
+        delimiter: &TokenKind,
+        terminal: &TokenKind,
+    ) -> Result<Vec<Statement>, Diagnostic> {
+        let mut fields: Vec<Statement> = Vec::new();
+        while &self.peek().kind != terminal {
+            fields.push(self.parse_parameter()?);
+
+            if &self.peek().kind != terminal {
+                self.expect(delimiter)?;
+            }
+        }
+        Ok(fields)
+    }
+
     fn parse_type_expression(&mut self) -> Result<TypeExpression, Diagnostic> {
         match self.peek().kind {
             TokenKind::Identifier(identifier) => {
-                let identifier = self.expect(TokenKind::Identifier(identifier))?;
+                let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 Ok(TypeExpression::Simple(identifier))
             }
             TokenKind::OpenSquare => {
-                let open_square = self.expect(TokenKind::OpenSquare)?;
+                let open_square = self.expect(&TokenKind::OpenSquare)?;
                 let size = if let TokenKind::IntLiteral(size) = self.peek().kind {
                     Ok(size)
                 } else {
@@ -364,7 +420,7 @@ impl<'src> Parser<'src> {
                 }?;
                 self.next()?; //consume the size token
 
-                self.expect(TokenKind::CloseSquare)?;
+                self.expect(&TokenKind::CloseSquare)?;
                 let element_type = self.parse_type_expression()?;
 
                 Ok(TypeExpression::Array(
@@ -374,7 +430,7 @@ impl<'src> Parser<'src> {
                 ))
             }
             TokenKind::Star => {
-                let star = self.expect(TokenKind::Star)?;
+                let star = self.expect(&TokenKind::Star)?;
                 let reference_type = self.parse_type_expression()?;
 
                 Ok(TypeExpression::Pointer(star, Box::new(reference_type)))
@@ -496,27 +552,33 @@ impl<'src> Parser<'src> {
             }
             TokenKind::OpenParen => self.parse_parenthesised(),
             TokenKind::OpenSquare => {
-                let open_square = self.expect(TokenKind::OpenSquare)?;
+                let open_square = self.expect(&TokenKind::OpenSquare)?;
 
                 let mut elements: Vec<Expression> = vec![];
                 while self.peek().kind != TokenKind::CloseSquare {
                     elements.push(self.parse_expression()?);
 
                     if self.peek().kind != TokenKind::CloseSquare {
-                        self.expect(TokenKind::Comma)?;
+                        self.expect(&TokenKind::Comma)?;
                     }
                 }
-                let close_square = self.expect(TokenKind::CloseSquare)?;
+                let close_square = self.expect(&TokenKind::CloseSquare)?;
 
                 Ok(Expression {
                     span: Span::from_to(open_square.span, close_square.span),
                     kind: ExpressionKind::ArrayLiteral(elements),
                 })
             }
+            TokenKind::OpenCurly => {
+                todo!("anonymous struct literal expression")
+            }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
-                let identifier = self.expect(TokenKind::Identifier(identifier))?;
+                let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 if self.peek().kind == TokenKind::OpenParen {
                     return self.parse_function_call(identifier);
+                }
+                if self.peek().kind == TokenKind::OpenCurly {
+                    return self.parse_struct_literal(identifier);
                 }
                 Ok(Expression {
                     span: identifier.span,
@@ -536,12 +598,24 @@ impl<'src> Parser<'src> {
         match self.peek().kind {
             //TODO: these two need to be applied after every expression recursively
             TokenKind::OpenSquare => self.parse_array_index(primary),
+            TokenKind::Dot => {
+                self.expect(&TokenKind::Dot)?;
+                let identifier = self.expect_identifier()?; //TODO: could be int literal for tuples? x.0, x.1?
+
+                Ok(Expression {
+                    span: Span::from_to(primary.span, identifier.span),
+                    kind: ExpressionKind::MemberAccess {
+                        expression: Box::new(primary),
+                        member: identifier,
+                    },
+                })
+            }
             _ => Ok(primary),
         }
     }
 
     fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
-        let _open_paren = self.expect(TokenKind::OpenParen)?;
+        let _open_paren = self.expect(&TokenKind::OpenParen)?;
 
         let mut arguments = vec![];
         while self.peek().kind != TokenKind::CloseParen {
@@ -549,11 +623,11 @@ impl<'src> Parser<'src> {
             arguments.push(arg);
 
             if self.peek().kind != TokenKind::CloseParen {
-                self.expect(TokenKind::Comma)?;
+                self.expect(&TokenKind::Comma)?;
             }
         }
 
-        let close_paren = self.expect(TokenKind::CloseParen)?;
+        let close_paren = self.expect(&TokenKind::CloseParen)?;
 
         Ok(Expression {
             span: Span::from_to(identifier.span, close_paren.span),
@@ -565,9 +639,9 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_array_index(&mut self, array: Expression) -> Result<Expression, Diagnostic> {
-        self.expect(TokenKind::OpenSquare)?;
+        self.expect(&TokenKind::OpenSquare)?;
         let index = self.parse_expression()?;
-        let close_square = self.expect(TokenKind::CloseSquare)?;
+        let close_square = self.expect(&TokenKind::CloseSquare)?;
 
         Ok(Expression {
             span: Span::from_to(array.span, close_square.span),
@@ -579,9 +653,9 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_parenthesised(&mut self) -> Result<Expression, Diagnostic> {
-        let open_paren = self.expect(TokenKind::OpenParen)?;
+        let open_paren = self.expect(&TokenKind::OpenParen)?;
         let expr = self.parse_expression()?;
-        let close_paren = self.expect(TokenKind::CloseParen)?;
+        let close_paren = self.expect(&TokenKind::CloseParen)?;
 
         Ok(Expression {
             span: Span::from_to(open_paren.span, close_paren.span),
@@ -591,9 +665,9 @@ impl<'src> Parser<'src> {
 
     fn get_binary_precedence(op: BinaryOp) -> i64 {
         match op {
-            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 4,
-            BinaryOp::Add | BinaryOp::Sub => 3,
-            BinaryOp::Lt | BinaryOp::Gt => 2,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
+            BinaryOp::Add | BinaryOp::Sub => 4,
+            BinaryOp::Lt | BinaryOp::Gt => 3,
             BinaryOp::Assign => 1,
         }
     }
@@ -628,9 +702,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn expect(&mut self, expected: TokenKind) -> Result<Token, Diagnostic> {
+    fn expect(&mut self, expected: &TokenKind) -> Result<Token, Diagnostic> {
         let token = self.next()?;
-        if token.kind == expected {
+        if &token.kind == expected {
             return Ok(token);
         }
         Err(Diagnostic {
@@ -655,10 +729,10 @@ impl<'src> Parser<'src> {
     fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
         let name_token = self.expect_identifier()?;
 
-        self.expect(TokenKind::Colon)?;
+        self.expect(&TokenKind::Colon)?;
 
         let mut_keyword = if let TokenKind::MutKeyword = &self.peek().kind {
-            Some(self.expect(TokenKind::MutKeyword)?)
+            Some(self.expect(&TokenKind::MutKeyword)?)
         } else {
             None
         };
@@ -671,6 +745,29 @@ impl<'src> Parser<'src> {
                 mut_keyword,
                 type_expression,
             },
+        })
+    }
+
+    fn parse_struct_literal(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
+        self.expect(&TokenKind::OpenCurly)?;
+
+        let mut fields: Vec<(Token, Expression)> = Vec::new();
+        while self.peek().kind != TokenKind::CloseCurly {
+            let field_identifier = self.expect_identifier()?;
+            self.expect(&TokenKind::Colon)?;
+            let value = self.parse_expression()?;
+
+            fields.push((field_identifier, value));
+
+            if self.peek().kind != TokenKind::CloseCurly {
+                self.expect(&TokenKind::Comma)?;
+            }
+        }
+        let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+        Ok(Expression {
+            span: Span::from_to(identifier.span, close_curly.span),
+            kind: ExpressionKind::StructLiteral { identifier, fields },
         })
     }
 }
