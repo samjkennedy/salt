@@ -11,7 +11,7 @@ main(): void {
     ptr: *i64 = &x;
 
     print_pointer(ptr);
-    ptr_set(mut ptr, 5);
+    ptr_set(mut &x, 5);
     print_pointer(ptr);
 
     print(x);
