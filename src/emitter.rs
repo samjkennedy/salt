@@ -136,10 +136,10 @@ impl Emitter {
 
     fn emit_var_decl_type(&mut self, type_kind: &TypeKind, name: &str) -> Result<(), Error> {
         match type_kind {
-            TypeKind::Void => write!(self.output, "void")?,
-            TypeKind::Bool => write!(self.output, "bool")?,
-            TypeKind::I64 => write!(self.output, "long")?,
-            TypeKind::F32 => write!(self.output, "float")?,
+            TypeKind::Void => write!(self.output, "void {}", name)?, //TODO void variables? Remove this
+            TypeKind::Bool => write!(self.output, "bool {}", name)?,
+            TypeKind::I64 => write!(self.output, "long  {}", name)?,
+            TypeKind::F32 => write!(self.output, "float   {}", name)?,
             TypeKind::Array { size, element_type } => {
                 self.emit_type(element_type)?;
                 write!(self.output, " {}[{}]", name, size)?;
@@ -232,6 +232,12 @@ impl Emitter {
             }
             CheckedExpressionKind::Variable { name, .. } => {
                 write!(self.output, "{}", name)
+            }
+            CheckedExpressionKind::ArrayIndex { array, index } => {
+                self.emit_expr(array)?;
+                write!(self.output, "[")?;
+                self.emit_expr(index)?;
+                write!(self.output, "]")
             }
         }
     }

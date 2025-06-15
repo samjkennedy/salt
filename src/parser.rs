@@ -69,6 +69,10 @@ pub enum ExpressionKind {
         identifier: Token,
         arguments: Vec<Expression>,
     },
+    ArrayIndex {
+        array: Box<Expression>,
+        index: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +113,7 @@ impl Expression {
                 right,
             } => left.is_lvalue() && right.is_lvalue(),
             ExpressionKind::FunctionCall { .. } => false,
+            ExpressionKind::ArrayIndex { .. } => true,
         }
     }
 }
@@ -218,6 +223,14 @@ impl<'src> Parser<'src> {
                 } else {
                     let expression = if self.peek().kind == TokenKind::OpenParen {
                         self.parse_function_call(identifier)?
+                    } else if self.peek().kind == TokenKind::OpenSquare {
+                        //TODO: This is horrible and there needs to be a more general case solution to this
+                        let expr = Expression {
+                            span: identifier.span,
+                            kind: ExpressionKind::Variable(identifier),
+                        };
+                        let array_index = self.parse_array_index(expr)?;
+                        self.parse_binary_expression_right(0, array_index)?
                     } else {
                         self.parse_binary_expression_right(
                             0,
@@ -456,14 +469,13 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(TokenKind::Identifier(identifier))?;
-                if self.peek().kind != TokenKind::OpenParen {
-                    return Ok(Expression {
-                        span: identifier.span,
-                        kind: ExpressionKind::Variable(identifier),
-                    });
+                if self.peek().kind == TokenKind::OpenParen {
+                    return self.parse_function_call(identifier);
                 }
-
-                self.parse_function_call(identifier)
+                Ok(Expression {
+                    span: identifier.span,
+                    kind: ExpressionKind::Variable(identifier),
+                })
             }
             _ => {
                 self.lexer.next()?;
@@ -472,9 +484,13 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
-        };
+        }?;
 
-        primary
+        match self.peek().kind {
+            //TODO: these two need to be applied after every expression recursively
+            TokenKind::OpenSquare => self.parse_array_index(primary),
+            _ => Ok(primary),
+        }
     }
 
     fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
@@ -497,6 +513,20 @@ impl<'src> Parser<'src> {
             kind: ExpressionKind::FunctionCall {
                 identifier,
                 arguments,
+            },
+        })
+    }
+
+    fn parse_array_index(&mut self, array: Expression) -> Result<Expression, Diagnostic> {
+        self.expect(TokenKind::OpenSquare)?;
+        let index = self.parse_expression()?;
+        let close_square = self.expect(TokenKind::CloseSquare)?;
+
+        Ok(Expression {
+            span: Span::from_to(array.span, close_square.span),
+            kind: ExpressionKind::ArrayIndex {
+                array: Box::new(array),
+                index: Box::new(index),
             },
         })
     }

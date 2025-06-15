@@ -114,6 +114,7 @@ impl CheckedExpression {
                 name: _name,
                 mutable,
             } => *mutable,
+            CheckedExpressionKind::ArrayIndex { .. } => true,
         }
     }
 }
@@ -136,6 +137,10 @@ pub enum CheckedExpressionKind {
     Variable {
         name: String,
         mutable: bool,
+    },
+    ArrayIndex {
+        array: Box<CheckedExpression>,
+        index: Box<CheckedExpression>,
     },
 }
 
@@ -665,6 +670,33 @@ impl<'src> TypeChecker<'src> {
                     }),
                 }
             }
+            ExpressionKind::ArrayIndex { array, index } => {
+                let index_span = index.span;
+
+                let checked_array = self.check_expr(*array)?;
+
+                if let TypeKind::Array {
+                    size: _size,
+                    element_type,
+                } = &checked_array.type_kind.clone()
+                {
+                    let checked_index = self.check_expr(*index)?;
+                    Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
+
+                    Ok(CheckedExpression {
+                        type_kind: *element_type.clone(),
+                        kind: CheckedExpressionKind::ArrayIndex {
+                            array: Box::new(checked_array),
+                            index: Box::new(checked_index),
+                        },
+                    })
+                } else {
+                    Err(Diagnostic {
+                        message: format!("cannot index type `{}`", checked_array.type_kind),
+                        span: expr.span,
+                    })
+                }
+            }
         }
     }
 
@@ -726,7 +758,7 @@ impl<'src> TypeChecker<'src> {
                     return Err(Diagnostic {
                         message: format!(
                             "cannot assign `{}` to variable of type `{}`",
-                            left, right
+                            right, left
                         ),
                         span,
                     });
