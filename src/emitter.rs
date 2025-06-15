@@ -273,6 +273,26 @@ impl Emitter {
                 self.emit_expr(index)?;
                 write!(self.output, "]")
             }
+            CheckedExpressionKind::StructLiteral {
+                name: _struct_name,
+                fields,
+                struct_type,
+            } => {
+                //(<name>){<field1>=<expr1>,...}
+                if let TypeKind::Struct { name, .. } = struct_type {
+                    write!(self.output, "({}) {{", name)?;
+                    for (i, (field_name, field_arg)) in fields.iter().enumerate() {
+                        write!(self.output, ".{} = ", field_name)?;
+                        self.emit_expr(field_arg)?;
+                        if i < fields.len() - 1 {
+                            write!(self.output, ", ")?;
+                        }
+                    }
+                    write!(self.output, "}}")
+                } else {
+                    unreachable!()
+                }
+            }
         }
     }
 

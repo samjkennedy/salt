@@ -72,6 +72,10 @@ pub enum ExpressionKind {
     Variable(Token),
     Parenthesized(Box<Expression>),
     ArrayLiteral(Vec<Expression>),
+    StructLiteral {
+        identifier: Token,
+        fields: Vec<(Token, Expression)>,
+    },
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -127,6 +131,7 @@ impl Expression {
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
             ExpressionKind::ArrayLiteral(_) => false,
+            ExpressionKind::StructLiteral { .. } => false,
             ExpressionKind::Binary {
                 left,
                 op: _op,
@@ -228,54 +233,59 @@ impl<'src> Parser<'src> {
                 let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 // This could be a variable declaration or expression
                 // Peek ahead to see if after the identifier we have a colon (variable declaration)
-                if let TokenKind::Colon = self.peek().kind {
-                    // Looks like a var decl to me
+                match self.peek().kind {
+                    TokenKind::Colon => {
+                        // Looks like a var decl to me
 
-                    //TODO: allow type inference
-                    self.expect(&TokenKind::Colon)?;
-                    let type_expression = self.parse_type_expression()?;
+                        //TODO: allow type inference
+                        self.expect(&TokenKind::Colon)?;
+                        let type_expression = self.parse_type_expression()?;
 
-                    //TODO: decide how to handle RAII
-                    self.expect(&TokenKind::Equals)?;
-                    let initialiser = self.parse_expression()?;
+                        //TODO: decide how to handle RAII
+                        self.expect(&TokenKind::Equals)?;
+                        let initialiser = self.parse_expression()?;
 
-                    let semicolon = self.expect(&TokenKind::Semicolon)?;
+                        let semicolon = self.expect(&TokenKind::Semicolon)?;
 
-                    Ok(Statement {
-                        span: Span::from_to(identifier.span, semicolon.span),
-                        kind: StatementKind::VariableDeclaration {
-                            identifier,
-                            type_expression,
-                            initialiser,
-                        },
-                    })
-                } else {
-                    let expression = if self.peek().kind == TokenKind::OpenParen {
-                        self.parse_function_call(identifier)?
-                    } else if self.peek().kind == TokenKind::OpenSquare {
-                        //TODO: This is horrible and there needs to be a more general case solution to this
-                        let expr = Expression {
-                            span: identifier.span,
-                            kind: ExpressionKind::Variable(identifier),
-                        };
-                        let array_index = self.parse_array_index(expr)?;
-                        self.parse_binary_expression_right(0, array_index)?
-                    } else {
-                        self.parse_binary_expression_right(
-                            0,
-                            Expression {
+                        Ok(Statement {
+                            span: Span::from_to(identifier.span, semicolon.span),
+                            kind: StatementKind::VariableDeclaration {
+                                identifier,
+                                type_expression,
+                                initialiser,
+                            },
+                        })
+                    }
+                    _ => {
+                        let expression = if self.peek().kind == TokenKind::OpenParen {
+                            self.parse_function_call(identifier)?
+                        } else if self.peek().kind == TokenKind::OpenSquare {
+                            //TODO: This is horrible and there needs to be a more general case solution to this
+                            let expr = Expression {
                                 span: identifier.span,
                                 kind: ExpressionKind::Variable(identifier),
-                            },
-                        )?
-                    };
+                            };
+                            let array_index = self.parse_array_index(expr)?;
+                            self.parse_binary_expression_right(0, array_index)?
+                        } else if self.peek().kind == TokenKind::OpenCurly {
+                            todo!("struct literals!")
+                        } else {
+                            self.parse_binary_expression_right(
+                                0,
+                                Expression {
+                                    span: identifier.span,
+                                    kind: ExpressionKind::Variable(identifier),
+                                },
+                            )?
+                        };
 
-                    let semicolon = self.expect(&TokenKind::Semicolon)?;
+                        let semicolon = self.expect(&TokenKind::Semicolon)?;
 
-                    Ok(Statement {
-                        span: Span::from_to(expression.span, semicolon.span),
-                        kind: StatementKind::Expression(expression),
-                    })
+                        Ok(Statement {
+                            span: Span::from_to(expression.span, semicolon.span),
+                            kind: StatementKind::Expression(expression),
+                        })
+                    }
                 }
             }
             TokenKind::WhileKeyword => {
@@ -538,10 +548,16 @@ impl<'src> Parser<'src> {
                     kind: ExpressionKind::ArrayLiteral(elements),
                 })
             }
+            TokenKind::OpenCurly => {
+                todo!("anonymous struct literal expression")
+            }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 if self.peek().kind == TokenKind::OpenParen {
                     return self.parse_function_call(identifier);
+                }
+                if self.peek().kind == TokenKind::OpenCurly {
+                    return self.parse_struct_literal(identifier);
                 }
                 Ok(Expression {
                     span: identifier.span,
@@ -696,6 +712,29 @@ impl<'src> Parser<'src> {
                 mut_keyword,
                 type_expression,
             },
+        })
+    }
+
+    fn parse_struct_literal(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
+        self.expect(&TokenKind::OpenCurly)?;
+
+        let mut fields: Vec<(Token, Expression)> = Vec::new();
+        while self.peek().kind != TokenKind::CloseCurly {
+            let field_identifier = self.expect_identifier()?;
+            self.expect(&TokenKind::Colon)?;
+            let value = self.parse_expression()?;
+
+            fields.push((field_identifier, value));
+
+            if self.peek().kind != TokenKind::CloseCurly {
+                self.expect(&TokenKind::Comma)?;
+            }
+        }
+        let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+        Ok(Expression {
+            span: Span::from_to(identifier.span, close_curly.span),
+            kind: ExpressionKind::StructLiteral { identifier, fields },
         })
     }
 }
