@@ -293,6 +293,15 @@ impl Emitter {
                     unreachable!()
                 }
             }
+            CheckedExpressionKind::MemberAccess { expression, member } => {
+                self.emit_expr(expression)?;
+
+                if let TypeKind::Pointer { .. } = expression.type_kind {
+                    write!(self.output, "->{}", member)
+                } else {
+                    write!(self.output, ".{}", member)
+                }
+            }
         }
     }
 

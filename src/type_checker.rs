@@ -154,6 +154,7 @@ impl CheckedExpression {
                 mutable,
             } => *mutable,
             CheckedExpressionKind::ArrayIndex { .. } => true,
+            CheckedExpressionKind::MemberAccess { .. } => true,
         }
     }
 }
@@ -189,6 +190,10 @@ pub enum CheckedExpressionKind {
         name: String,
         fields: Vec<(String, CheckedExpression)>,
         struct_type: TypeKind,
+    },
+    MemberAccess {
+        expression: Box<CheckedExpression>,
+        member: String,
     },
 }
 
@@ -368,6 +373,8 @@ impl<'src> TypeChecker<'src> {
                     {
                         let type_kind = self.bind_type_kind(type_expression)?;
 
+                        //TODO warn/error if mut is used with non-pointer types
+
                         checked_fields.push(CheckedStatement::Parameter {
                             type_kind: type_kind.clone(),
                             name: name_token.text,
@@ -500,6 +507,8 @@ impl<'src> TypeChecker<'src> {
         let return_type_span = return_type.span();
         let return_type_kind = self.bind_type_kind(return_type)?;
 
+        self.scope.push(Scope::new(self.get_return_context()));
+
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
         let mut params: Vec<FunctionParam> = Vec::new();
         for parameter in parameters {
@@ -532,6 +541,25 @@ impl<'src> TypeChecker<'src> {
             }
         }
 
+        //TODO: declare the function in its own scope to allow recursion
+        // self.scope
+        //     .last_mut()
+        //     .expect("missing global scope")
+        //     .try_declare_identifier(
+        //         ScopedIdentifier::Function {
+        //             return_type: return_type_kind.clone(),
+        //             name: name.clone(),
+        //             params,
+        //         },
+        //         return_type_span,
+        //     )?;
+
+        self.scope.push(Scope::new(return_type_kind.clone()));
+        let checked_body = self.check_statement(*body)?;
+        self.scope.pop();
+
+        self.scope.pop();
+
         self.scope
             .last_mut()
             .expect("missing global scope")
@@ -543,10 +571,6 @@ impl<'src> TypeChecker<'src> {
                 },
                 return_type_span,
             )?;
-
-        self.scope.push(Scope::new(return_type_kind.clone()));
-        let checked_body = self.check_statement(*body)?;
-        self.scope.pop();
 
         if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
             return Err(Diagnostic {
@@ -958,6 +982,79 @@ impl<'src> TypeChecker<'src> {
                     ))
                 }
             }
+            ExpressionKind::MemberAccess { expression, member } => {
+                let expr_span = expr.span;
+                let checked_expression = self.check_expr(*expression)?;
+                let expression_type = &checked_expression.type_kind.clone();
+
+                Self::check_member_access(&member, checked_expression, expression_type, expr_span)
+            }
+        }
+    }
+
+    fn check_member_access(
+        member: &Token,
+        checked_expression: CheckedExpression,
+        expression_type: &TypeKind,
+        expr_span: Span,
+    ) -> Result<CheckedExpression, Diagnostic> {
+        match expression_type {
+            TypeKind::Pointer { reference_type } => {
+                //Unwrap the pointer
+                Self::check_member_access(member, checked_expression, reference_type, expr_span)
+            }
+            TypeKind::Struct { fields, .. } => {
+                let mut field_names = Vec::new();
+                for field in fields {
+                    if let CheckedStatement::Parameter { type_kind, name } = field {
+                        field_names.push(name.clone());
+
+                        if name == &member.text {
+                            return Ok(CheckedExpression {
+                                kind: CheckedExpressionKind::MemberAccess {
+                                    expression: Box::new(checked_expression),
+                                    member: member.text.clone(),
+                                },
+                                type_kind: type_kind.clone(),
+                            });
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                }
+                Err(Diagnostic::with_hint(
+                    format!(
+                        "no such field `{}` on type `{}`",
+                        member.text, checked_expression.type_kind
+                    ),
+                    format!("available fields are: [{}]", field_names.join(", ")),
+                    expr_span,
+                ))
+            }
+            TypeKind::Array { size, .. } => {
+                if member.text == "len" {
+                    Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::IntLiteral(*size),
+                        type_kind: TypeKind::I64,
+                    })
+                } else {
+                    Err(Diagnostic::with_hint(
+                        format!(
+                            "no such field `{}` on type `{}`",
+                            member.text, checked_expression.type_kind
+                        ),
+                        "available fields are: [len]".to_string(),
+                        expr_span,
+                    ))
+                }
+            }
+            _ => Err(Diagnostic::new(
+                format!(
+                    "type `{}` does not have fields",
+                    checked_expression.type_kind
+                ),
+                expr_span,
+            )),
         }
     }
 

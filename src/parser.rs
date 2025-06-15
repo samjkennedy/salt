@@ -93,6 +93,10 @@ pub enum ExpressionKind {
         array: Box<Expression>,
         index: Box<Expression>,
     },
+    MemberAccess {
+        expression: Box<Expression>,
+        member: Token,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +147,7 @@ impl Expression {
             } => operand.is_lvalue(),
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
+            ExpressionKind::MemberAccess { .. } => true,
         }
     }
 }
@@ -269,6 +274,22 @@ impl<'src> Parser<'src> {
                             self.parse_binary_expression_right(0, array_index)?
                         } else if self.peek().kind == TokenKind::OpenCurly {
                             todo!("struct literals!")
+                        } else if self.peek().kind == TokenKind::Dot {
+                            let expr = Expression {
+                                span: identifier.span,
+                                kind: ExpressionKind::Variable(identifier),
+                            };
+                            self.expect(&TokenKind::Dot)?;
+                            let identifier = self.expect_identifier()?;
+
+                            let access = Expression {
+                                span: Span::from_to(expr.span, identifier.span),
+                                kind: ExpressionKind::MemberAccess {
+                                    expression: Box::new(expr),
+                                    member: identifier,
+                                },
+                            };
+                            self.parse_binary_expression_right(0, access)?
                         } else {
                             self.parse_binary_expression_right(
                                 0,
@@ -577,6 +598,18 @@ impl<'src> Parser<'src> {
         match self.peek().kind {
             //TODO: these two need to be applied after every expression recursively
             TokenKind::OpenSquare => self.parse_array_index(primary),
+            TokenKind::Dot => {
+                self.expect(&TokenKind::Dot)?;
+                let identifier = self.expect_identifier()?; //TODO: could be int literal for tuples? x.0, x.1?
+
+                Ok(Expression {
+                    span: Span::from_to(primary.span, identifier.span),
+                    kind: ExpressionKind::MemberAccess {
+                        expression: Box::new(primary),
+                        member: identifier,
+                    },
+                })
+            }
             _ => Ok(primary),
         }
     }
@@ -632,9 +665,9 @@ impl<'src> Parser<'src> {
 
     fn get_binary_precedence(op: BinaryOp) -> i64 {
         match op {
-            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 4,
-            BinaryOp::Add | BinaryOp::Sub => 3,
-            BinaryOp::Lt | BinaryOp::Gt => 2,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
+            BinaryOp::Add | BinaryOp::Sub => 4,
+            BinaryOp::Lt | BinaryOp::Gt => 3,
             BinaryOp::Assign => 1,
         }
     }
