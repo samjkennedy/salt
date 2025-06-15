@@ -7,10 +7,10 @@ main(): void {
         i = i + 1;
     }
 
-    x[1] = false;
+    x[1] = 5;
     j: i64 = 0;
     while j < 3 {
         print(x[j]);
         j = j + 1;
     }
-}
+}   

@@ -526,7 +526,7 @@ impl<'src> Parser<'src> {
             _ => {
                 self.lexer.next()?;
                 Err(Diagnostic {
-                    message: format!("parsing {:?} is not yet implemented", token.kind),
+                    message: format!("unexpected token {:?}", token.kind),
                     hint: None,
                     span: token.span,
                 })
@@ -614,7 +614,8 @@ impl<'src> Parser<'src> {
 
     fn get_unary_precedence(op: UnaryOp) -> i64 {
         match op {
-            UnaryOp::Mut | UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+            UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+            UnaryOp::Mut => 1,
         }
     }
 
