@@ -9,6 +9,7 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    Ampersand,
     Equals,
     OpenParen,
     CloseParen,
@@ -16,6 +17,9 @@ pub enum TokenKind {
     CloseCurly,
     OpenAngle,
     CloseAngle,
+    OpenSquare,
+    CloseSquare,
+    Colon,
     Semicolon,
     Comma,
     TrueKeyword,
@@ -70,6 +74,7 @@ impl<'src> Lexer<'src> {
                 '*' => Ok(self.make_token(TokenKind::Star, "*".to_owned())),
                 '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
                 '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
+                '&' => Ok(self.make_token(TokenKind::Ampersand, "&".to_owned())),
                 '=' => Ok(self.make_token(TokenKind::Equals, "=".to_owned())),
                 '(' => Ok(self.make_token(TokenKind::OpenParen, "(".to_owned())),
                 ')' => Ok(self.make_token(TokenKind::CloseParen, ")".to_owned())),
@@ -77,19 +82,22 @@ impl<'src> Lexer<'src> {
                 '}' => Ok(self.make_token(TokenKind::CloseCurly, "}".to_owned())),
                 '<' => Ok(self.make_token(TokenKind::OpenAngle, "<".to_owned())),
                 '>' => Ok(self.make_token(TokenKind::CloseAngle, ">".to_owned())),
+                '[' => Ok(self.make_token(TokenKind::OpenSquare, "[".to_owned())),
+                ']' => Ok(self.make_token(TokenKind::CloseSquare, "]".to_owned())),
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
+                ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
                 '0'..='9' => Ok(self.lex_number()),
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
                     self.cursor += 1;
-                    Err(Diagnostic {
-                        message: format!("Unexpected character '{}'", c),
-                        span: Span {
+                    Err(Diagnostic::new(
+                        format!("Unexpected character '{}'", c),
+                        Span {
                             start: self.cursor - 1,
                             length: 1,
                         },
-                    })
+                    ))
                 }
             };
         }

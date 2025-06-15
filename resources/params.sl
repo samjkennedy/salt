@@ -1,10 +1,10 @@
-void sum(i64 a, i64 b) {
+sum(a: i64, b: i64): void {
     print(a + b);
 }
 
-void main() {
+main(): void {
     sum(10, 11);
 
-    i64 x = 15;
+    x: i64 = 15;
     sum(x, x + 1);
 }

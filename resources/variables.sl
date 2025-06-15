@@ -1,7 +1,7 @@
-void main() {
-    i64 x = 10;
-    i64 y = x;
-    bool b = false;
+main(): void {
+    x: i64 = 10;
+    y: i64 = x;
+    b: bool = false;
 
     print(x);
     print(y);

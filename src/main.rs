@@ -52,8 +52,8 @@ fn main() -> Result<()> {
         out_path.to_string_lossy().into_owned()
     });
 
-    // let input_path = "resources/diagnostics.sl".to_owned();
-    // let output_c_path = "resources/diagnostics.c";
+    // let input_path = "resources/arrays.sl".to_owned();
+    // let output_c_path = "resources/arrays.c";
     // let keep_c_file = true;
 
     // Step 1: Compile .sl → .c
@@ -61,7 +61,13 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to read input file `{}`", input_path))?;
 
     let mut lexer = Lexer::new(&program);
-    let mut parser = Parser::new(&mut lexer);
+    let mut parser = match Parser::new(&mut lexer) {
+        Ok(p) => p,
+        Err(diagnostic) => {
+            diagnostic.report_with_source(&input_path, &program);
+            return Ok(());
+        }
+    };
     let mut type_checker = TypeChecker::new(&mut parser);
 
     let mut diagnostics = Vec::new();

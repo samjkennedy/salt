@@ -6,19 +6,19 @@ pub enum StatementKind {
     Expression(Expression),
     Block(Vec<Statement>),
     FunctionDefinition {
-        return_type: Token, //TODO could be a whole expression i.e. *int[]
+        return_type: TypeExpression,
         name: Token,
         parameters: Vec<Statement>,
         body: Box<Statement>,
     },
     Parameter {
-        mut_keyword: Option<Token>,
-        type_token: Token,
         name_token: Token,
+        mut_keyword: Option<Token>,
+        type_expression: TypeExpression,
     },
     VariableDeclaration {
-        type_name: Token, //TODO could be a whole expression i.e. *int[]
-        name: Token,
+        identifier: Token,
+        type_expression: TypeExpression,
         initialiser: Expression,
     },
     While {
@@ -53,20 +53,37 @@ pub enum BinaryOp {
     Assign,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum UnaryOp {
+    Ref,
+    Deref,
+    Mut,
+    // Neg,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
     Variable(Token),
     Parenthesized(Box<Expression>),
+    ArrayLiteral(Vec<Expression>),
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
         right: Box<Expression>,
     },
+    Unary {
+        operator: UnaryOp,
+        operand: Box<Expression>,
+    },
     FunctionCall {
         identifier: Token,
         arguments: Vec<Expression>,
+    },
+    ArrayIndex {
+        array: Box<Expression>,
+        index: Box<Expression>,
     },
 }
 
@@ -76,6 +93,28 @@ pub struct Expression {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub enum TypeExpression {
+    Simple(Token),                          //i64, bool, Struct etc
+    Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
+    Pointer(Token, Box<TypeExpression>),
+    //Slice(Box<TypeExpression>)
+}
+
+impl TypeExpression {
+    pub fn span(&self) -> Span {
+        match self {
+            TypeExpression::Simple(token) => token.span,
+            TypeExpression::Array(open_square, _, element_type) => {
+                Span::from_to(open_square.span, element_type.span())
+            }
+            TypeExpression::Pointer(star, reference_type) => {
+                Span::from_to(star.span, reference_type.span())
+            }
+        }
+    }
+}
+
 impl Expression {
     fn is_lvalue(&self) -> bool {
         match &self.kind {
@@ -83,12 +122,18 @@ impl Expression {
             ExpressionKind::IntLiteral(_) => false,
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
+            ExpressionKind::ArrayLiteral(_) => false,
             ExpressionKind::Binary {
                 left,
                 op: _op,
                 right,
             } => left.is_lvalue() && right.is_lvalue(),
+            ExpressionKind::Unary {
+                operator: _op,
+                operand,
+            } => operand.is_lvalue(),
             ExpressionKind::FunctionCall { .. } => false,
+            ExpressionKind::ArrayIndex { .. } => true,
         }
     }
 }
@@ -100,18 +145,18 @@ enum ParseContext {
 }
 
 pub struct Parser<'src> {
-    current: Result<Token, Diagnostic>,
+    current: Token,
     lexer: &'src mut Lexer<'src>,
     context: ParseContext,
 }
 
 impl<'src> Parser<'src> {
-    pub fn new(lexer: &'src mut Lexer<'src>) -> Parser<'src> {
-        Parser {
-            current: lexer.next(),
+    pub fn new(lexer: &'src mut Lexer<'src>) -> Result<Parser<'src>, Diagnostic> {
+        Ok(Parser {
+            current: lexer.next()?, //Naively assume the first character is allowed
             lexer,
             context: ParseContext::Global,
-        }
+        })
     }
 
     pub fn has_next(&self) -> bool {
@@ -120,12 +165,12 @@ impl<'src> Parser<'src> {
 
     //TODO: this results in only being able to report 1 diagnostic per function...
     pub fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
-        match self.peek()?.kind {
+        match self.peek().kind {
             TokenKind::OpenCurly => {
                 let open_curly = self.expect(TokenKind::OpenCurly)?;
                 let mut statements = vec![];
 
-                while self.peek()?.kind != TokenKind::CloseCurly {
+                while self.peek().kind != TokenKind::CloseCurly {
                     statements.push(self.parse_statement()?);
                 }
                 let close_curly = self.expect(TokenKind::CloseCurly)?;
@@ -135,29 +180,33 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Block(statements),
                 })
             }
-            TokenKind::Identifier(identifier) if self.context == ParseContext::Global => {
-                let return_type = self.expect(TokenKind::Identifier(identifier))?;
+
+            TokenKind::Identifier(_) if self.context == ParseContext::Global => {
                 let name = self.expect_identifier()?;
 
                 self.expect(TokenKind::OpenParen)?;
 
                 let mut parameters: Vec<Statement> = Vec::new();
-                while self.peek()?.kind != TokenKind::CloseParen {
+                while self.peek().kind != TokenKind::CloseParen {
                     parameters.push(self.parse_parameter()?);
 
-                    if self.peek()?.kind != TokenKind::CloseParen {
+                    if self.peek().kind != TokenKind::CloseParen {
                         self.expect(TokenKind::Comma)?;
                     }
                 }
 
                 self.expect(TokenKind::CloseParen)?;
 
+                //TODO: allow pure void functions to omit the type
+                self.expect(TokenKind::Colon)?;
+                let return_type = self.parse_type_expression()?;
+
                 self.context = ParseContext::Function;
                 let body = self.parse_statement()?;
                 self.context = ParseContext::Global;
 
                 Ok(Statement {
-                    span: Span::from_to(return_type.span, body.span),
+                    span: Span::from_to(return_type.span(), body.span),
                     kind: StatementKind::FunctionDefinition {
                         return_type,
                         name,
@@ -166,15 +215,18 @@ impl<'src> Parser<'src> {
                     },
                 })
             }
-            TokenKind::Identifier(type_name) => {
+            TokenKind::Identifier(identifier) => {
+                let identifier = self.expect(TokenKind::Identifier(identifier))?;
                 // This could be a variable declaration or expression
-                let identifier = self.expect(TokenKind::Identifier(type_name))?;
-
-                // Peek ahead to see if after the identifier we have another identifier (variable declaration)
-                if let TokenKind::Identifier(var_name) = self.peek()?.kind {
+                // Peek ahead to see if after the identifier we have a colon (variable declaration)
+                if let TokenKind::Colon = self.peek().kind {
                     // Looks like a var decl to me
-                    let name_token = self.expect(TokenKind::Identifier(var_name.clone()))?;
 
+                    //TODO: allow type inference
+                    self.expect(TokenKind::Colon)?;
+                    let type_expression = self.parse_type_expression()?;
+
+                    //TODO: decide how to handle RAII
                     self.expect(TokenKind::Equals)?;
                     let initialiser = self.parse_expression()?;
 
@@ -183,14 +235,22 @@ impl<'src> Parser<'src> {
                     Ok(Statement {
                         span: Span::from_to(identifier.span, semicolon.span),
                         kind: StatementKind::VariableDeclaration {
-                            type_name: identifier,
-                            name: name_token,
+                            identifier,
+                            type_expression,
                             initialiser,
                         },
                     })
                 } else {
-                    let expression = if self.peek()?.kind == TokenKind::OpenParen {
+                    let expression = if self.peek().kind == TokenKind::OpenParen {
                         self.parse_function_call(identifier)?
+                    } else if self.peek().kind == TokenKind::OpenSquare {
+                        //TODO: This is horrible and there needs to be a more general case solution to this
+                        let expr = Expression {
+                            span: identifier.span,
+                            kind: ExpressionKind::Variable(identifier),
+                        };
+                        let array_index = self.parse_array_index(expr)?;
+                        self.parse_binary_expression_right(0, array_index)?
                     } else {
                         self.parse_binary_expression_right(
                             0,
@@ -228,7 +288,7 @@ impl<'src> Parser<'src> {
 
                 let body = self.parse_statement()?;
 
-                if self.peek()?.kind == TokenKind::ElseKeyword {
+                if self.peek().kind == TokenKind::ElseKeyword {
                     self.expect(TokenKind::ElseKeyword)?;
                     let else_branch = self.parse_statement()?;
 
@@ -254,7 +314,7 @@ impl<'src> Parser<'src> {
             TokenKind::ReturnKeyword => {
                 let return_keyword = self.expect(TokenKind::ReturnKeyword)?;
 
-                if self.peek()?.kind == TokenKind::Semicolon {
+                if self.peek().kind == TokenKind::Semicolon {
                     let semicolon = self.expect(TokenKind::Semicolon)?;
                     return Ok(Statement {
                         span: Span::from_to(return_keyword.span, semicolon.span),
@@ -284,17 +344,60 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn parse_type_expression(&mut self) -> Result<TypeExpression, Diagnostic> {
+        match self.peek().kind {
+            TokenKind::Identifier(identifier) => {
+                let identifier = self.expect(TokenKind::Identifier(identifier))?;
+                Ok(TypeExpression::Simple(identifier))
+            }
+            TokenKind::OpenSquare => {
+                let open_square = self.expect(TokenKind::OpenSquare)?;
+                let size = if let TokenKind::IntLiteral(size) = self.peek().kind {
+                    Ok(size)
+                } else {
+                    //TODO: the diagnostics get a bit mangled after this
+                    Err(Diagnostic {
+                        message: "only integer literals allow in array size".to_string(),
+                        hint: None,
+                        span: self.current.span,
+                    })
+                }?;
+                self.next()?; //consume the size token
+
+                self.expect(TokenKind::CloseSquare)?;
+                let element_type = self.parse_type_expression()?;
+
+                Ok(TypeExpression::Array(
+                    open_square,
+                    size,
+                    Box::new(element_type),
+                ))
+            }
+            TokenKind::Star => {
+                let star = self.expect(TokenKind::Star)?;
+                let reference_type = self.parse_type_expression()?;
+
+                Ok(TypeExpression::Pointer(star, Box::new(reference_type)))
+            }
+            _ => Err(Diagnostic {
+                message: format!("expected identifier but got {:?}", self.peek().kind),
+                hint: None,
+                span: self.peek().span,
+            }),
+        }
+    }
+
     fn parse_expression(&mut self) -> Result<Expression, Diagnostic> {
         self.parse_binary_expression(0)
     }
 
     fn next(&mut self) -> Result<Token, Diagnostic> {
         let token = self.current.clone();
-        self.current = self.lexer.next();
-        token
+        self.current = self.lexer.next()?;
+        Ok(token)
     }
 
-    fn peek(&self) -> Result<Token, Diagnostic> {
+    fn peek(&self) -> Token {
         self.current.clone()
     }
 
@@ -302,7 +405,28 @@ impl<'src> Parser<'src> {
         &mut self,
         parent_precedence: i64,
     ) -> Result<Expression, Diagnostic> {
-        let left = self.parse_primary_expression()?;
+        let token = self.peek();
+        let left = if let Some(op) = Self::get_unary_op(token.kind) {
+            let precedence = Self::get_unary_precedence(op);
+            if precedence > parent_precedence {
+                let unary_operator = self.next()?; //consume the operator
+
+                let operand = self.parse_binary_expression(precedence)?;
+
+                Expression {
+                    span: Span::from_to(unary_operator.span, operand.span),
+                    kind: ExpressionKind::Unary {
+                        operator: op,
+                        operand: Box::new(operand),
+                    },
+                }
+            } else {
+                self.parse_primary_expression()?
+            }
+        } else {
+            self.parse_primary_expression()?
+        };
+
         self.parse_binary_expression_right(parent_precedence, left)
     }
 
@@ -311,11 +435,13 @@ impl<'src> Parser<'src> {
         parent_precedence: i64,
         mut left: Expression,
     ) -> Result<Expression, Diagnostic> {
-        while let Ok(token) = self.peek() {
+        loop {
+            let token = self.peek();
             if let Some(op) = Self::get_binary_op(token.kind) {
                 if !left.is_lvalue() && op == BinaryOp::Assign {
                     return Err(Diagnostic {
                         message: format!("invalid left hand operand {:?}", left.kind),
+                        hint: None,
                         span: left.span,
                     });
                 }
@@ -341,12 +467,10 @@ impl<'src> Parser<'src> {
                 return Ok(left);
             }
         }
-
-        Ok(left)
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, Diagnostic> {
-        let token = self.peek()?;
+        let token = self.peek();
 
         let primary = match token.kind {
             TokenKind::TrueKeyword => {
@@ -371,38 +495,60 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::OpenParen => self.parse_parenthesised(),
+            TokenKind::OpenSquare => {
+                let open_square = self.expect(TokenKind::OpenSquare)?;
+
+                let mut elements: Vec<Expression> = vec![];
+                while self.peek().kind != TokenKind::CloseSquare {
+                    elements.push(self.parse_expression()?);
+
+                    if self.peek().kind != TokenKind::CloseSquare {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                }
+                let close_square = self.expect(TokenKind::CloseSquare)?;
+
+                Ok(Expression {
+                    span: Span::from_to(open_square.span, close_square.span),
+                    kind: ExpressionKind::ArrayLiteral(elements),
+                })
+            }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(TokenKind::Identifier(identifier))?;
-                if self.peek()?.kind != TokenKind::OpenParen {
-                    return Ok(Expression {
-                        span: identifier.span,
-                        kind: ExpressionKind::Variable(identifier),
-                    });
+                if self.peek().kind == TokenKind::OpenParen {
+                    return self.parse_function_call(identifier);
                 }
-
-                self.parse_function_call(identifier)
+                Ok(Expression {
+                    span: identifier.span,
+                    kind: ExpressionKind::Variable(identifier),
+                })
             }
             _ => {
                 self.lexer.next()?;
                 Err(Diagnostic {
                     message: format!("parsing {:?} is not yet implemented", token.kind),
+                    hint: None,
                     span: token.span,
                 })
             }
-        };
+        }?;
 
-        primary
+        match self.peek().kind {
+            //TODO: these two need to be applied after every expression recursively
+            TokenKind::OpenSquare => self.parse_array_index(primary),
+            _ => Ok(primary),
+        }
     }
 
     fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {
         let _open_paren = self.expect(TokenKind::OpenParen)?;
 
         let mut arguments = vec![];
-        while self.peek()?.kind != TokenKind::CloseParen {
+        while self.peek().kind != TokenKind::CloseParen {
             let arg = self.parse_expression()?;
             arguments.push(arg);
 
-            if self.peek()?.kind != TokenKind::CloseParen {
+            if self.peek().kind != TokenKind::CloseParen {
                 self.expect(TokenKind::Comma)?;
             }
         }
@@ -414,6 +560,20 @@ impl<'src> Parser<'src> {
             kind: ExpressionKind::FunctionCall {
                 identifier,
                 arguments,
+            },
+        })
+    }
+
+    fn parse_array_index(&mut self, array: Expression) -> Result<Expression, Diagnostic> {
+        self.expect(TokenKind::OpenSquare)?;
+        let index = self.parse_expression()?;
+        let close_square = self.expect(TokenKind::CloseSquare)?;
+
+        Ok(Expression {
+            span: Span::from_to(array.span, close_square.span),
+            kind: ExpressionKind::ArrayIndex {
+                array: Box::new(array),
+                index: Box::new(index),
             },
         })
     }
@@ -452,6 +612,21 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn get_unary_precedence(op: UnaryOp) -> i64 {
+        match op {
+            UnaryOp::Mut | UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+        }
+    }
+
+    fn get_unary_op(kind: TokenKind) -> Option<UnaryOp> {
+        match kind {
+            TokenKind::MutKeyword => Some(UnaryOp::Mut),
+            TokenKind::Ampersand => Some(UnaryOp::Ref),
+            TokenKind::Star => Some(UnaryOp::Deref),
+            _ => None,
+        }
+    }
+
     fn expect(&mut self, expected: TokenKind) -> Result<Token, Diagnostic> {
         let token = self.next()?;
         if token.kind == expected {
@@ -459,6 +634,7 @@ impl<'src> Parser<'src> {
         }
         Err(Diagnostic {
             message: format!("expected {:?} but got {:?}", expected, token.kind),
+            hint: None,
             span: token.span,
         })
     }
@@ -470,26 +646,29 @@ impl<'src> Parser<'src> {
         }
         Err(Diagnostic {
             message: format!("expected identifier, but got {:?}", token.kind),
+            hint: None,
             span: token.span,
         })
     }
 
     fn parse_parameter(&mut self) -> Result<Statement, Diagnostic> {
-        //For now only parse simple types and names, in future allow complex types and `mut`
-        let mut_keyword = if let TokenKind::MutKeyword = &self.peek()?.kind {
+        let name_token = self.expect_identifier()?;
+
+        self.expect(TokenKind::Colon)?;
+
+        let mut_keyword = if let TokenKind::MutKeyword = &self.peek().kind {
             Some(self.expect(TokenKind::MutKeyword)?)
         } else {
             None
         };
-        let type_token = self.expect_identifier()?;
-        let name_token = self.expect_identifier()?;
+        let type_expression = self.parse_type_expression()?;
 
         Ok(Statement {
-            span: Span::from_to(type_token.span, name_token.span),
+            span: Span::from_to(name_token.span, type_expression.span()),
             kind: StatementKind::Parameter {
-                mut_keyword,
-                type_token,
                 name_token,
+                mut_keyword,
+                type_expression,
             },
         })
     }
