@@ -38,12 +38,16 @@ pub enum CheckedStatement {
     },
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TypeKind {
     Void,
     Bool,
     I64,
     F32,
+    Array {
+        size: i64,
+        element_type: Box<TypeKind>,
+    },
 }
 
 impl Display for TypeKind {
@@ -53,11 +57,14 @@ impl Display for TypeKind {
             TypeKind::Bool => write!(f, "bool"),
             TypeKind::I64 => write!(f, "i64"),
             TypeKind::F32 => write!(f, "f32"),
+            TypeKind::Array { size, element_type } => {
+                write!(f, "[{}]{}", size, element_type)
+            }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedBinaryOp {
     Add { result: TypeKind },
     Sub { result: TypeKind },
@@ -72,14 +79,14 @@ pub enum CheckedBinaryOp {
 impl CheckedBinaryOp {
     fn get_result_type(&self) -> TypeKind {
         match self {
-            CheckedBinaryOp::Add { result } => *result,
-            CheckedBinaryOp::Sub { result } => *result,
-            CheckedBinaryOp::Mul { result } => *result,
-            CheckedBinaryOp::Div { result } => *result,
-            CheckedBinaryOp::Mod { result } => *result,
-            CheckedBinaryOp::Lt { result } => *result,
-            CheckedBinaryOp::Gt { result } => *result,
-            CheckedBinaryOp::Assign { result } => *result,
+            CheckedBinaryOp::Add { result } => result.clone(),
+            CheckedBinaryOp::Sub { result } => result.clone(),
+            CheckedBinaryOp::Mul { result } => result.clone(),
+            CheckedBinaryOp::Div { result } => result.clone(),
+            CheckedBinaryOp::Mod { result } => result.clone(),
+            CheckedBinaryOp::Lt { result } => result.clone(),
+            CheckedBinaryOp::Gt { result } => result.clone(),
+            CheckedBinaryOp::Assign { result } => result.clone(),
         }
     }
 }
@@ -96,6 +103,7 @@ impl CheckedExpression {
             CheckedExpressionKind::BoolLiteral(_) => false,
             CheckedExpressionKind::IntLiteral(_) => false,
             CheckedExpressionKind::Parenthesized(_) => false,
+            CheckedExpressionKind::ArrayLiteral(_) => false,
             CheckedExpressionKind::Binary {
                 left,
                 operator: _operator,
@@ -115,6 +123,7 @@ pub enum CheckedExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
     Parenthesized(Box<CheckedExpression>),
+    ArrayLiteral(Vec<CheckedExpression>),
     Binary {
         left: Box<CheckedExpression>,
         operator: CheckedBinaryOp,
@@ -246,6 +255,7 @@ impl<'src> TypeChecker<'src> {
             .last()
             .expect("Missing global scope")
             .return_context
+            .clone()
     }
 
     fn check_statement(&mut self, statement: Statement) -> Result<CheckedStatement, Diagnostic> {
@@ -383,14 +393,14 @@ impl<'src> TypeChecker<'src> {
                 self.try_declare_identifier(
                     ScopedIdentifier::Variable {
                         name: name_token.text.clone(),
-                        type_kind,
+                        type_kind: type_kind.clone(),
                         mutable: mut_keyword.is_some(),
                     },
                     parameter.span,
                 )?;
 
                 checked_parameters.push(CheckedStatement::Parameter {
-                    type_kind,
+                    type_kind: type_kind.clone(),
                     name: name_token.text,
                 });
                 param_types.push(type_kind);
@@ -404,14 +414,14 @@ impl<'src> TypeChecker<'src> {
             .expect("missing global scope")
             .try_declare_identifier(
                 ScopedIdentifier::Function {
-                    return_type: return_type_kind,
+                    return_type: return_type_kind.clone(),
                     name: name.clone(),
                     param_types,
                 },
                 return_type_span,
             )?;
 
-        self.scope.push(Scope::new(return_type_kind));
+        self.scope.push(Scope::new(return_type_kind.clone()));
         let checked_body = self.check_statement(*body)?;
         self.scope.pop();
 
@@ -475,7 +485,7 @@ impl<'src> TypeChecker<'src> {
             .try_declare_identifier(
                 ScopedIdentifier::Variable {
                     name: variable_name.clone(),
-                    type_kind,
+                    type_kind: type_kind.clone(),
                     mutable: true, //TODO consts
                 },
                 name_token.span,
@@ -505,8 +515,45 @@ impl<'src> TypeChecker<'src> {
             ExpressionKind::Parenthesized(expr) => {
                 let checked_expr = self.check_expr(*expr)?;
                 Ok(CheckedExpression {
-                    type_kind: checked_expr.type_kind,
+                    type_kind: checked_expr.type_kind.clone(),
                     kind: CheckedExpressionKind::Parenthesized(Box::new(checked_expr)),
+                })
+            }
+            ExpressionKind::ArrayLiteral(elements) => {
+                if elements.is_empty() {
+                    todo!("empty arrays are not yet supported, requires literal context");
+                }
+                let mut element_type: Option<TypeKind> = None;
+                let mut checked_elements: Vec<CheckedExpression> = Vec::new();
+
+                for element in elements {
+                    let element_span = element.span;
+                    let checked_element = self.check_expr(element)?;
+
+                    match &element_type {
+                        Some(checked_type) => {
+                            Self::expect_type(
+                                checked_type,
+                                &checked_element.type_kind,
+                                element_span,
+                            )?;
+                            checked_elements.push(checked_element);
+                        }
+                        None => {
+                            element_type = Some(checked_element.type_kind.clone());
+                            checked_elements.push(checked_element);
+                        }
+                    }
+                }
+
+                Ok(CheckedExpression {
+                    type_kind: TypeKind::Array {
+                        size: checked_elements.len() as i64,
+                        element_type: Box::new(
+                            element_type.expect("bound empty array without resolving the type"),
+                        ),
+                    },
+                    kind: CheckedExpressionKind::ArrayLiteral(checked_elements),
                 })
             }
             ExpressionKind::Binary { left, op, right } => {
@@ -516,8 +563,8 @@ impl<'src> TypeChecker<'src> {
 
                 let checked_op = Self::get_binary_op(
                     &op,
-                    checked_left.type_kind,
-                    checked_right.type_kind,
+                    checked_left.type_kind.clone(),
+                    checked_right.type_kind.clone(),
                     expr.span,
                 )?;
 
@@ -629,31 +676,31 @@ impl<'src> TypeChecker<'src> {
     ) -> Result<CheckedBinaryOp, Diagnostic> {
         match op {
             BinaryOp::Add => Self::get_numeric_binary_op(
-                left,
+                left.clone(),
                 right,
                 CheckedBinaryOp::Add { result: left },
                 span,
             ),
             BinaryOp::Sub => Self::get_numeric_binary_op(
-                left,
+                left.clone(),
                 right,
                 CheckedBinaryOp::Sub { result: left },
                 span,
             ),
             BinaryOp::Mul => Self::get_numeric_binary_op(
-                left,
+                left.clone(),
                 right,
                 CheckedBinaryOp::Mul { result: left },
                 span,
             ),
             BinaryOp::Div => Self::get_numeric_binary_op(
-                left,
+                left.clone(),
                 right,
                 CheckedBinaryOp::Div { result: left },
                 span,
             ),
             BinaryOp::Mod => Self::get_numeric_binary_op(
-                left,
+                left.clone(),
                 right,
                 CheckedBinaryOp::Mod { result: left },
                 span,
@@ -695,7 +742,7 @@ impl<'src> TypeChecker<'src> {
         result: CheckedBinaryOp,
         span: Span,
     ) -> Result<CheckedBinaryOp, Diagnostic> {
-        match (left, right) {
+        match (left.clone(), right.clone()) {
             (TypeKind::I64, TypeKind::I64) => Ok(result),
             (TypeKind::F32, TypeKind::F32) => Ok(result),
             _ => Err(Diagnostic {
@@ -735,6 +782,13 @@ impl<'src> TypeChecker<'src> {
                     span: type_expression_span,
                 }),
             },
+            TypeExpression::Array(_, size, element_type) => {
+                let element_type = self.bind_type_kind(*element_type)?;
+                Ok(TypeKind::Array {
+                    size,
+                    element_type: Box::new(element_type),
+                })
+            }
         }
     }
 }

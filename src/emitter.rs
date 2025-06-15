@@ -48,8 +48,7 @@ impl Emitter {
 
                 for (i, parameter) in parameters.iter().enumerate() {
                     if let CheckedStatement::Parameter { type_kind, name } = parameter {
-                        self.emit_type(type_kind)?;
-                        write!(self.output, " {}", name)?;
+                        self.emit_var_decl_type(type_kind, name)?;
                     } else {
                         unreachable!()
                     }
@@ -75,8 +74,8 @@ impl Emitter {
                 name,
                 initialiser,
             } => {
-                self.emit_type(type_kind)?;
-                write!(self.output, " {} = ", name)?;
+                self.emit_var_decl_type(type_kind, name)?;
+                write!(self.output, " = ")?;
                 self.emit_expr(initialiser)?;
                 writeln!(self.output, ";")
             }
@@ -124,6 +123,27 @@ impl Emitter {
             TypeKind::Bool => write!(self.output, "bool")?,
             TypeKind::I64 => write!(self.output, "long")?,
             TypeKind::F32 => write!(self.output, "float")?,
+            TypeKind::Array {
+                size: _size,
+                element_type,
+            } => {
+                self.emit_type(element_type)?;
+                write!(self.output, "[]")?
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_var_decl_type(&mut self, type_kind: &TypeKind, name: &str) -> Result<(), Error> {
+        match type_kind {
+            TypeKind::Void => write!(self.output, "void")?,
+            TypeKind::Bool => write!(self.output, "bool")?,
+            TypeKind::I64 => write!(self.output, "long")?,
+            TypeKind::F32 => write!(self.output, "float")?,
+            TypeKind::Array { size, element_type } => {
+                self.emit_type(element_type)?;
+                write!(self.output, " {}[{}]", name, size)?;
+            }
         }
         Ok(())
     }
@@ -137,6 +157,30 @@ impl Emitter {
                 self.emit_expr(expr)?;
                 write!(self.output, ")")?;
                 Ok(())
+            }
+            CheckedExpressionKind::ArrayLiteral(elements) => {
+                write!(self.output, "{{")?;
+                for (i, element) in elements.iter().enumerate() {
+                    self.emit_expr(element)?;
+                    if i < elements.len() - 1 {
+                        write!(self.output, ", ")?;
+                    }
+                }
+                write!(self.output, "}}")
+                //TODO: This is the emission for calling a function with an array literal
+                /*
+                write!(self.output, "((")?;
+                self.emit_type(&expr.type_kind)?;
+                write!(self.output, ")")?;
+                write!(self.output, "{{")?;
+                for (i, element) in elements.iter().enumerate() {
+                    self.emit_expr(element)?;
+                    if  i < elements.len() - 1 {
+                        write!(self.output, ", ")?;
+                    }
+                }
+                write!(self.output, "}})")
+                */
             }
             CheckedExpressionKind::Binary {
                 left,
@@ -169,6 +213,7 @@ impl Emitter {
                         }
                         TypeKind::I64 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
                         TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
+                        TypeKind::Array { .. } => panic!("cannot print array"),
                     }
                 } else {
                     write!(self.output, "{}(", name)?;

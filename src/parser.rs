@@ -59,6 +59,7 @@ pub enum ExpressionKind {
     IntLiteral(i64),
     Variable(Token),
     Parenthesized(Box<Expression>),
+    ArrayLiteral(Vec<Expression>),
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -79,7 +80,7 @@ pub struct Expression {
 #[derive(Debug, Clone)]
 pub enum TypeExpression {
     Simple(Token), //i64, bool, Struct etc
-                   // Array(Box<TypeExpression>, i64), //i64[5], bool[8][8], etc
+    Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
                    //Slice(Box<TypeExpression>)
 }
 
@@ -87,6 +88,9 @@ impl TypeExpression {
     pub fn span(&self) -> Span {
         match self {
             TypeExpression::Simple(token) => token.span,
+            TypeExpression::Array(open_square, _, element_type) => {
+                Span::from_to(open_square.span, element_type.span())
+            }
         }
     }
 }
@@ -98,6 +102,7 @@ impl Expression {
             ExpressionKind::IntLiteral(_) => false,
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
+            ExpressionKind::ArrayLiteral(_) => false,
             ExpressionKind::Binary {
                 left,
                 op: _op,
@@ -307,26 +312,42 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_type_expression(&mut self) -> Result<TypeExpression, Diagnostic> {
-        if let TokenKind::Identifier(identifier) = self.peek().kind {
-            let identifier = self.expect(TokenKind::Identifier(identifier))?;
+        match self.peek().kind {
+            TokenKind::Identifier(identifier) => {
+                let identifier = self.expect(TokenKind::Identifier(identifier))?;
+                Ok(TypeExpression::Simple(identifier))
+            }
+            TokenKind::OpenSquare => {
+                let open_square = self.expect(TokenKind::OpenSquare)?;
+                let size = if let TokenKind::IntLiteral(size) = self.peek().kind {
+                    Ok(size)
+                } else {
+                    //TODO: the diagnostics get a bit mangled after this
+                    Err(Diagnostic {
+                        message: "only integer literals allow in array size".to_string(),
+                        span: self.current.span,
+                    })
+                }?;
+                self.next()?; //consume the size token
 
-            return match self.peek().kind {
-                TokenKind::OpenSquare => Err(Diagnostic {
-                    message: "arrays are not yet implemented".to_string(),
-                    span: self.peek().span,
-                }),
-                TokenKind::Star => Err(Diagnostic {
-                    message: "pointers are not yet implemented".to_string(),
-                    span: self.peek().span,
-                }),
-                _ => Ok(TypeExpression::Simple(identifier)),
-            };
+                self.expect(TokenKind::CloseSquare)?;
+                let element_type = self.parse_type_expression()?;
+
+                Ok(TypeExpression::Array(
+                    open_square,
+                    size,
+                    Box::new(element_type),
+                ))
+            }
+            TokenKind::Star => Err(Diagnostic {
+                message: "pointers are not yet implemented".to_string(),
+                span: self.peek().span,
+            }),
+            _ => Err(Diagnostic {
+                message: format!("expected identifier but got {:?}", self.peek().kind),
+                span: self.peek().span,
+            }),
         }
-
-        Err(Diagnostic {
-            message: format!("expected identifier but got {:?}", self.peek().kind),
-            span: self.peek().span,
-        })
     }
 
     fn parse_expression(&mut self) -> Result<Expression, Diagnostic> {
@@ -415,6 +436,24 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::OpenParen => self.parse_parenthesised(),
+            TokenKind::OpenSquare => {
+                let open_square = self.expect(TokenKind::OpenSquare)?;
+
+                let mut elements: Vec<Expression> = vec![];
+                while self.peek().kind != TokenKind::CloseSquare {
+                    elements.push(self.parse_expression()?);
+
+                    if self.peek().kind != TokenKind::CloseSquare {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                }
+                let close_square = self.expect(TokenKind::CloseSquare)?;
+
+                Ok(Expression {
+                    span: Span::from_to(open_square.span, close_square.span),
+                    kind: ExpressionKind::ArrayLiteral(elements),
+                })
+            }
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(TokenKind::Identifier(identifier))?;
                 if self.peek().kind != TokenKind::OpenParen {
