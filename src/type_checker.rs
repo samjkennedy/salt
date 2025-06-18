@@ -439,11 +439,11 @@ impl<'src> TypeChecker<'src> {
                 })
             }
             StatementKind::VariableDeclaration {
-                type_expression,
                 identifier,
+                type_expression,
                 initialiser,
                 ..
-            } => self.check_variable_declaration(type_expression, identifier, initialiser),
+            } => self.check_variable_declaration(identifier, type_expression, initialiser),
             StatementKind::While { condition, body } => {
                 let condition_span = condition.span;
                 let checked_condition = self.check_expr(condition)?;
@@ -652,12 +652,21 @@ impl<'src> TypeChecker<'src> {
 
     fn check_variable_declaration(
         &mut self,
-        type_expression: TypeExpression,
         name_token: Token,
+        type_expression: Option<TypeExpression>,
         initialiser: Expression,
     ) -> Result<CheckedStatement, Diagnostic> {
-        let type_kind = self.bind_type_kind(type_expression)?;
         let variable_name = name_token.text;
+        let initialiser_span = initialiser.span;
+        let checked_initialiser = self.check_expr(initialiser)?;
+
+        let type_kind = if let Some(type_expression) = type_expression {
+            let type_kind = self.bind_type_kind(type_expression)?;
+            Self::expect_type(&type_kind, &checked_initialiser.type_kind, initialiser_span)?;
+            type_kind
+        } else {
+            checked_initialiser.type_kind.clone()
+        };
 
         self.scope
             .last_mut()
@@ -670,10 +679,6 @@ impl<'src> TypeChecker<'src> {
                 },
                 name_token.span,
             )?;
-        let initialiser_span = initialiser.span;
-        let checked_initialiser = self.check_expr(initialiser)?;
-
-        Self::expect_type(&type_kind, &checked_initialiser.type_kind, initialiser_span)?;
 
         Ok(CheckedStatement::VariableDeclaration {
             type_kind,
@@ -1107,7 +1112,9 @@ impl<'src> TypeChecker<'src> {
                             expression: Box::new(checked_expression),
                             member: member.text.clone(),
                         },
-                        type_kind: TypeKind::Pointer { reference_type: element_type.clone() },
+                        type_kind: TypeKind::Pointer {
+                            reference_type: element_type.clone(),
+                        },
                     })
                 } else {
                     Err(Diagnostic::with_hint(

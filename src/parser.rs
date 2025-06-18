@@ -18,7 +18,7 @@ pub enum StatementKind {
     },
     VariableDeclaration {
         identifier: Token,
-        type_expression: TypeExpression,
+        type_expression: Option<TypeExpression>,
         initialiser: Expression,
     },
     While {
@@ -110,7 +110,7 @@ pub enum TypeExpression {
     Simple(Token),                          //i64, bool, Struct etc
     Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
     Pointer(Token, Box<TypeExpression>),
-    Slice(Token, Box<TypeExpression>)
+    Slice(Token, Box<TypeExpression>),
 }
 
 impl TypeExpression {
@@ -244,12 +244,16 @@ impl<'src> Parser<'src> {
                 match self.peek().kind {
                     TokenKind::Colon => {
                         // Looks like a var decl to me
-
-                        //TODO: allow type inference
                         self.expect(&TokenKind::Colon)?;
-                        let type_expression = self.parse_type_expression()?;
 
-                        //TODO: decide how to handle RAII
+                        //Get the type annotation if it exists
+                        let type_expression = if self.peek().kind != TokenKind::Equals {
+                            Some(self.parse_type_expression()?)
+                        } else {
+                            None
+                        };
+
+                        //TODO: decide how to handle not initialising a value
                         self.expect(&TokenKind::Equals)?;
                         let initialiser = self.parse_expression()?;
 

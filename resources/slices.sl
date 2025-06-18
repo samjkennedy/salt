@@ -6,7 +6,7 @@ halve(sl: mut []i64): void {
     }
 }
 
-main(): void {
+sl1(): void {
     nums: [5]i64 = [10, 20, 30, 40, 50];
 
     s: []i64 = &nums;
@@ -26,4 +26,12 @@ main(): void {
     }
 
     print(*s.data);
+}
+
+sl2(): void {
+    
+}
+
+main(): void {
+    sl1();
 }
