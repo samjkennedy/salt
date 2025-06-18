@@ -113,8 +113,9 @@ pub struct Expression {
 pub enum TypeExpression {
     Simple(Token),                          //i64, bool, Struct etc
     Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
-    Pointer(Token, Box<TypeExpression>),
-    Slice(Token, Box<TypeExpression>),
+    Pointer(Token, Box<TypeExpression>),    //*i64
+    Slice(Token, Box<TypeExpression>),      //[]i64
+    Option(Token, Box<TypeExpression>),     // ?i64
 }
 
 impl TypeExpression {
@@ -129,6 +130,9 @@ impl TypeExpression {
             }
             TypeExpression::Slice(open_square, element_type) => {
                 Span::from_to(open_square.span, element_type.span())
+            }
+            TypeExpression::Option(question, reference_type) => {
+                Span::from_to(question.span, reference_type.span())
             }
         }
     }
@@ -454,6 +458,12 @@ impl<'src> Parser<'src> {
                 let reference_type = self.parse_type_expression()?;
 
                 Ok(TypeExpression::Pointer(star, Box::new(reference_type)))
+            }
+            TokenKind::Question => {
+                let question = self.expect(&TokenKind::Question)?;
+                let reference_type = self.parse_type_expression()?;
+
+                Ok(TypeExpression::Option(question, Box::new(reference_type)))
             }
             _ => Err(Diagnostic {
                 message: format!("expected identifier but got {:?}", self.peek().kind),

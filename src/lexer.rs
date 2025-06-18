@@ -22,6 +22,7 @@ pub enum TokenKind {
     Colon,
     Semicolon,
     Comma,
+    Question,
     Dot,
     DotDot,
     TrueKeyword,
@@ -90,6 +91,7 @@ impl<'src> Lexer<'src> {
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
                 ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
+                '?' => Ok(self.make_token(TokenKind::Question, ",".to_owned())),
                 '.' => {
                     self.cursor += 1;
                     if let Some('.') = self.peek() {

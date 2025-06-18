@@ -59,6 +59,9 @@ pub enum TypeKind {
     Pointer {
         reference_type: Box<TypeKind>,
     },
+    Option {
+        reference_type: Box<TypeKind>,
+    },
     Struct {
         name: String,
         fields: Vec<CheckedStatement>,
@@ -82,6 +85,9 @@ impl Display for TypeKind {
             }
             TypeKind::Pointer { reference_type } => {
                 write!(f, "*{}", reference_type)
+            }
+            TypeKind::Option { reference_type } => {
+                write!(f, "?{}", reference_type)
             }
             TypeKind::Struct { name, .. } => write!(f, "{}", name),
             TypeKind::Range => write!(f, "range"),
@@ -121,6 +127,7 @@ pub enum CheckedUnaryOp {
     Mut { result: TypeKind },
     Ref { result: TypeKind },
     Deref { result: TypeKind },
+    Some { result: TypeKind },
 }
 
 impl CheckedUnaryOp {
@@ -129,6 +136,7 @@ impl CheckedUnaryOp {
             CheckedUnaryOp::Mut { result } => result.clone(),
             CheckedUnaryOp::Ref { result } => result.clone(),
             CheckedUnaryOp::Deref { result } => result.clone(),
+            CheckedUnaryOp::Some { result } => result.clone(),
         }
     }
 }
@@ -513,6 +521,28 @@ impl<'src> TypeChecker<'src> {
                                 hint: None,
                                 span: expr_span,
                             })
+                        }
+                        TypeKind::Option { reference_type } => {
+                            let checked_expression_type_kind = &checked_expression.type_kind;
+                            Self::expect_type(
+                                &reference_type,
+                                checked_expression_type_kind,
+                                expr_span,
+                            )?;
+
+                            let optional_expression = CheckedExpression {
+                                type_kind: checked_expression_type_kind.clone(),
+                                kind: CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Some {
+                                        result: checked_expression_type_kind.clone(),
+                                    },
+                                    operand: Box::new(checked_expression),
+                                },
+                            };
+
+                            return Ok(CheckedStatement::Return {
+                                expression: Some(optional_expression),
+                            });
                         }
                         return_type => Self::expect_type(
                             &return_type,
@@ -1377,7 +1407,7 @@ impl<'src> TypeChecker<'src> {
         Ok(())
     }
 
-    fn bind_type_kind(&self, type_expression: TypeExpression) -> Result<TypeKind, Diagnostic> {
+    fn bind_type_kind(&mut self, type_expression: TypeExpression) -> Result<TypeKind, Diagnostic> {
         let type_expression_span = type_expression.span();
         match type_expression {
             TypeExpression::Simple(token) => match token.text.as_str() {
@@ -1418,6 +1448,14 @@ impl<'src> TypeChecker<'src> {
                 Ok(TypeKind::Pointer {
                     reference_type: Box::new(reference_type),
                 })
+            }
+            TypeExpression::Option(_, reference_type) => {
+                let reference_type = self.bind_type_kind(*reference_type)?;
+                let option_type = TypeKind::Option {
+                    reference_type: Box::new(reference_type),
+                };
+                self.module.add_type(&option_type);
+                Ok(option_type)
             }
         }
     }

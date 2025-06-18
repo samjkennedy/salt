@@ -24,18 +24,19 @@ impl Emitter {
             match type_kind {
                 TypeKind::Slice { element_type } => {
                     writeln!(self.output, "typedef struct {{")?;
-                    // for field in fields {
-                    //     if let CheckedStatement::Parameter { type_kind, name } = field {
-                    //         self.emit_var_decl_type(type_kind, name)?;
-                    //         writeln!(self.output, ";")?;
-                    //     } else {
-                    //         unreachable!()
-                    //     }
-                    // }
+                    write!(self.output, "\t")?;
                     self.emit_type(&element_type)?;
                     writeln!(self.output, " *data;")?;
                     writeln!(self.output, "\tlong len;")?;
                     writeln!(self.output, "}} Slice_{};", element_type)?;
+                }
+                TypeKind::Option { reference_type } => {
+                    writeln!(self.output, "typedef struct {{")?;
+                    write!(self.output, "\t")?;
+                    self.emit_type(&reference_type)?;
+                    writeln!(self.output, " value;")?;
+                    writeln!(self.output, "\tbool has_value;")?;
+                    writeln!(self.output, "}} Option_{};", reference_type)?;
                 }
                 _ => todo!(),
             }
@@ -207,8 +208,14 @@ impl Emitter {
                 self.emit_type(element_type)?;
                 write!(self.output, "[]")?
             }
-            TypeKind::Pointer { reference_type } => write!(self.output, "{}*", reference_type)?,
+            TypeKind::Pointer { reference_type } => {
+                write!(self.output, "*")?;
+                self.emit_type(reference_type)?
+            }
             TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
+            TypeKind::Option { reference_type } => {
+                write!(self.output, "Option_{}", reference_type)?
+            }
             TypeKind::Slice { .. } => todo!(),
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
@@ -235,6 +242,9 @@ impl Emitter {
             } => write!(self.output, "{} {}", struct_name, name)?,
             TypeKind::Slice { element_type } => {
                 write!(self.output, "Slice_{} {}", element_type, name)?;
+            }
+            TypeKind::Option { reference_type } => {
+                write!(self.output, "Option_{} {}", reference_type, name)?;
             }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
@@ -280,6 +290,17 @@ impl Emitter {
                     CheckedUnaryOp::Mut { .. } => {}
                     CheckedUnaryOp::Ref { .. } => write!(self.output, " &")?,
                     CheckedUnaryOp::Deref { .. } => write!(self.output, " *")?,
+                    CheckedUnaryOp::Some { result } => {
+                        write!(self.output, "(Option_{}", result)?;
+                        write!(self.output, ") {{")?;
+
+                        write!(self.output, " .value=")?;
+                        self.emit_expr(operand)?;
+                        write!(self.output, ",")?;
+
+                        write!(self.output, " .has_value=true")?;
+                        writeln!(self.output, " }};")?
+                    }
                 }
                 self.emit_expr(operand)
             }
@@ -307,6 +328,7 @@ impl Emitter {
                         TypeKind::Any => unreachable!(),
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Struct { .. } => panic!("cannot print structs"),
+                        TypeKind::Option { .. } => panic!("cannot print options"),
                         TypeKind::Range => panic!("cannot print ranges"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
