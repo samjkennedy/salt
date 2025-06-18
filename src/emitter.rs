@@ -117,7 +117,25 @@ impl Emitter {
                                 unreachable!()
                             }
                         }
-                        _ => todo!(),
+                        CheckedExpressionKind::ArraySlice { array, range } => {
+                            if let CheckedExpressionKind::Range { lower, upper } = &range.kind {
+                                //start pointer
+                                self.emit_expr(array)?;
+                                write!(self.output, "[")?;
+                                self.emit_expr(lower)?;
+                                writeln!(self.output, "];")?;
+
+                                //len
+                                write!(self.output, "{}.len = ", name)?;
+                                self.emit_expr(upper)?;
+                                write!(self.output, " - ")?;
+                                self.emit_expr(lower)?;
+                                writeln!(self.output, ";")
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        _ => todo!("initialising slices with {:?}", initialiser.kind),
                     }
                 } else {
                     write!(self.output, " = ")?;
@@ -192,6 +210,7 @@ impl Emitter {
             TypeKind::Pointer { reference_type } => write!(self.output, "{}*", reference_type)?,
             TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
             TypeKind::Slice { .. } => todo!(),
+            TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
         Ok(())
     }
@@ -217,6 +236,7 @@ impl Emitter {
             TypeKind::Slice { element_type } => {
                 write!(self.output, "Slice_{} {}", element_type, name)?;
             }
+            TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
         Ok(())
     }
@@ -287,6 +307,7 @@ impl Emitter {
                         TypeKind::Any => unreachable!(),
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Struct { .. } => panic!("cannot print structs"),
+                        TypeKind::Range => panic!("cannot print ranges"),
                         TypeKind::Bool => {
                             write!(self.output, "\tprintf(\"%s\\n\", ")?;
                             self.emit_expr(&arguments[0])?;
@@ -360,6 +381,10 @@ impl Emitter {
                 } else {
                     write!(self.output, ".{}", member)
                 }
+            }
+            CheckedExpressionKind::Range { .. } => unreachable!("should not be emitted"),
+            CheckedExpressionKind::ArraySlice { .. } => {
+                todo!()
             }
         }
     }

@@ -63,6 +63,7 @@ pub enum TypeKind {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Range,
 }
 
 impl Display for TypeKind {
@@ -83,6 +84,7 @@ impl Display for TypeKind {
                 write!(f, "*{}", reference_type)
             }
             TypeKind::Struct { name, .. } => write!(f, "{}", name),
+            TypeKind::Range => write!(f, "range"),
         }
     }
 }
@@ -161,6 +163,8 @@ impl CheckedExpression {
             } => *mutable,
             CheckedExpressionKind::ArrayIndex { array, .. } => array.is_lvalue(),
             CheckedExpressionKind::MemberAccess { expression, .. } => expression.is_lvalue(),
+            CheckedExpressionKind::Range { .. } => false,
+            CheckedExpressionKind::ArraySlice { .. } => false,
         }
     }
 }
@@ -200,6 +204,14 @@ pub enum CheckedExpressionKind {
     MemberAccess {
         expression: Box<CheckedExpression>,
         member: String,
+    },
+    ArraySlice {
+        array: Box<CheckedExpression>,
+        range: Box<CheckedExpression>,
+    },
+    Range {
+        lower: Box<CheckedExpression>,
+        upper: Box<CheckedExpression>,
     },
 }
 
@@ -895,25 +907,59 @@ impl<'src> TypeChecker<'src> {
                 let index_span = index.span;
 
                 let checked_array = self.check_expr(*array)?;
+                let checked_index = self.check_expr(*index)?;
 
                 match &checked_array.type_kind.clone() {
                     TypeKind::Array {
                         size: _size,
                         element_type,
                     } => {
-                        let checked_index = self.check_expr(*index)?;
-                        Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
+                        if let TypeKind::I64 = checked_index.type_kind {
+                            Self::expect_type(
+                                &TypeKind::I64,
+                                &checked_index.type_kind,
+                                index_span,
+                            )?;
 
-                        Ok(CheckedExpression {
-                            type_kind: *element_type.clone(),
-                            kind: CheckedExpressionKind::ArrayIndex {
-                                array: Box::new(checked_array),
-                                index: Box::new(checked_index),
-                            },
-                        })
+                            Ok(CheckedExpression {
+                                type_kind: *element_type.clone(),
+                                kind: CheckedExpressionKind::ArrayIndex {
+                                    array: Box::new(checked_array),
+                                    index: Box::new(checked_index),
+                                },
+                            })
+                        } else if let TypeKind::Range = checked_index.type_kind {
+                            Self::expect_type(
+                                &TypeKind::Range,
+                                &checked_index.type_kind,
+                                index_span,
+                            )?;
+
+                            let slice_type = TypeKind::Slice {
+                                element_type: element_type.clone(),
+                            };
+                            self.module.add_type(&slice_type);
+
+                            Ok(CheckedExpression {
+                                type_kind: TypeKind::Slice {
+                                    element_type: element_type.clone(),
+                                },
+                                kind: CheckedExpressionKind::ArraySlice {
+                                    array: Box::new(checked_array),
+                                    range: Box::new(checked_index),
+                                },
+                            })
+                        } else {
+                            Err(Diagnostic::new(
+                                format!(
+                                    "cannot index array with type `{}`",
+                                    checked_index.type_kind
+                                ),
+                                index_span,
+                            ))
+                        }
                     }
                     TypeKind::Slice { element_type } => {
-                        let checked_index = self.check_expr(*index)?;
                         Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
 
                         Ok(CheckedExpression {
@@ -1038,6 +1084,24 @@ impl<'src> TypeChecker<'src> {
 
                 Self::check_member_access(&member, checked_expression, expression_type, expr_span)
             }
+            ExpressionKind::Range { lower, upper } => {
+                let lower_span = lower.span;
+                let upper_span = upper.span;
+
+                let checked_lower = self.check_expr(*lower)?;
+                Self::expect_type(&TypeKind::I64, &checked_lower.type_kind, lower_span)?;
+
+                let checked_upper = self.check_expr(*upper)?;
+                Self::expect_type(&TypeKind::I64, &checked_upper.type_kind, upper_span)?;
+
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::Range {
+                        lower: Box::new(checked_lower),
+                        upper: Box::new(checked_upper),
+                    },
+                    type_kind: TypeKind::Range,
+                })
+            }
         }
     }
 
@@ -1149,7 +1213,9 @@ impl<'src> TypeChecker<'src> {
                     return Err(Diagnostic {
                         message: "cannot make a mutable reference to non-assignable value"
                             .to_string(),
-                        hint: Some("remove the `mut`".to_string()),
+                        hint: Some(
+                            "consider assigning the value to a mutable variable first".to_string(),
+                        ),
                         span,
                     });
                 }

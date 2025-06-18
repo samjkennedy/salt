@@ -97,6 +97,10 @@ pub enum ExpressionKind {
         expression: Box<Expression>,
         member: Token,
     },
+    Range {
+        lower: Box<Expression>,
+        upper: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,7 @@ impl Expression {
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
             ExpressionKind::MemberAccess { .. } => true,
+            ExpressionKind::Range { .. } => false,
         }
     }
 }
@@ -622,6 +627,18 @@ impl<'src> Parser<'src> {
                     kind: ExpressionKind::MemberAccess {
                         expression: Box::new(primary),
                         member: identifier,
+                    },
+                })
+            }
+            TokenKind::DotDot => {
+                self.expect(&TokenKind::DotDot)?;
+                let upper = self.parse_expression()?;
+
+                Ok(Expression {
+                    span: Span::from_to(primary.span, upper.span),
+                    kind: ExpressionKind::Range {
+                        lower: Box::new(primary),
+                        upper: Box::new(upper),
                     },
                 })
             }
