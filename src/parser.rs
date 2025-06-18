@@ -110,7 +110,7 @@ pub enum TypeExpression {
     Simple(Token),                          //i64, bool, Struct etc
     Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
     Pointer(Token, Box<TypeExpression>),
-    //Slice(Box<TypeExpression>)
+    Slice(Token, Box<TypeExpression>)
 }
 
 impl TypeExpression {
@@ -122,6 +122,9 @@ impl TypeExpression {
             }
             TypeExpression::Pointer(star, reference_type) => {
                 Span::from_to(star.span, reference_type.span())
+            }
+            TypeExpression::Slice(open_square, element_type) => {
+                Span::from_to(open_square.span, element_type.span())
             }
         }
     }
@@ -408,6 +411,14 @@ impl<'src> Parser<'src> {
             }
             TokenKind::OpenSquare => {
                 let open_square = self.expect(&TokenKind::OpenSquare)?;
+
+                if self.peek().kind == TokenKind::CloseSquare {
+                    self.expect(&TokenKind::CloseSquare)?;
+                    let element_type = self.parse_type_expression()?;
+
+                    return Ok(TypeExpression::Slice(open_square, Box::new(element_type)));
+                }
+
                 let size = if let TokenKind::IntLiteral(size) = self.peek().kind {
                     Ok(size)
                 } else {

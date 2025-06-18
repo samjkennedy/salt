@@ -1,9 +1,29 @@
-main(args: str[]): void {
+halve(sl: mut []i64): void {
+    i: i64 = 0;
+   while i < sl.len {
+        sl[i] = sl[i] / 2;
+        i = i + 1;
+    }
+}
+
+main(): void {
     nums: [5]i64 = [10, 20, 30, 40, 50];
 
-    mid: []i64 = nums[1..4];  // slice: [20, 30, 40]
+    s: []i64 = &nums;
 
-    for (i32 n in mid) {
-        printf("%d\n", n);
+    i: i64 = 0;
+    while i < s.len {
+        print(s[i]);
+        i = i + 1;
     }
+
+    halve(mut s);
+
+    i = 0;
+    while i < s.len {
+        print(s[i]);
+        i = i + 1;
+    }
+
+    print(*s.data);
 }

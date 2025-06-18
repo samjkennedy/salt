@@ -129,7 +129,7 @@ impl<'src> Lexer<'src> {
             return None;
         }
 
-        Some(self.input.as_bytes()[self.cursor] as char)
+        self.input.chars().nth(self.cursor)
     }
 
     fn skip_whitespace(&mut self) {

@@ -1,6 +1,6 @@
 use crate::type_checker::{
     CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, CheckedUnaryOp,
-    TypeKind,
+    Module, TypeKind,
 };
 use std::fs::File;
 use std::io::Error;
@@ -10,17 +10,40 @@ pub struct Emitter {
     output: File,
 }
 
+// struct Rewriter {}
+
 impl Emitter {
     pub fn new(output: File) -> Self {
         Emitter { output }
     }
 
-    pub fn emit(&mut self, program: &Vec<CheckedStatement>) -> Result<(), Error> {
+    pub fn emit(&mut self, module: Module) -> Result<(), Error> {
         self.emit_preamble()?;
 
-        for statement in program {
+        for type_kind in module.types {
+            match type_kind {
+                TypeKind::Slice { element_type } => {
+                    writeln!(self.output, "typedef struct {{")?;
+                    // for field in fields {
+                    //     if let CheckedStatement::Parameter { type_kind, name } = field {
+                    //         self.emit_var_decl_type(type_kind, name)?;
+                    //         writeln!(self.output, ";")?;
+                    //     } else {
+                    //         unreachable!()
+                    //     }
+                    // }
+                    self.emit_type(&element_type)?;
+                    writeln!(self.output, " *data;")?;
+                    writeln!(self.output, "\tlong len;")?;
+                    writeln!(self.output, "}} Slice_{};", element_type)?;
+                }
+                _ => todo!(),
+            }
+        }
+
+        for statement in module.statements {
             // println!("{:#?}", statement);
-            self.emit_statement(statement)?;
+            self.emit_statement(&statement)?;
         }
         Ok(())
     }
@@ -76,9 +99,31 @@ impl Emitter {
                 initialiser,
             } => {
                 self.emit_var_decl_type(type_kind, name)?;
-                write!(self.output, " = ")?;
-                self.emit_expr(initialiser)?;
-                writeln!(self.output, ";")
+                if let TypeKind::Slice { .. } = type_kind {
+                    writeln!(self.output, ";")?;
+                    write!(self.output, "{}.data = &", name)?;
+
+                    //TODO: This is a mess and should be done at a rewriter stage
+                    match &initialiser.kind {
+                        CheckedExpressionKind::Unary {
+                            operator: CheckedUnaryOp::Ref { .. },
+                            operand,
+                        } => {
+                            self.emit_expr(operand)?;
+                            writeln!(self.output, "[0];")?;
+                            if let TypeKind::Array { size, .. } = operand.type_kind {
+                                writeln!(self.output, "{}.len = {};", name, size)
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        _ => todo!(),
+                    }
+                } else {
+                    write!(self.output, " = ")?;
+                    self.emit_expr(initialiser)?;
+                    writeln!(self.output, ";")
+                }
             }
             CheckedStatement::While { condition, body } => {
                 write!(self.output, "while (")?;
@@ -146,6 +191,7 @@ impl Emitter {
             }
             TypeKind::Pointer { reference_type } => write!(self.output, "{}*", reference_type)?,
             TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
+            TypeKind::Slice { .. } => todo!(),
         }
         Ok(())
     }
@@ -168,6 +214,9 @@ impl Emitter {
             TypeKind::Struct {
                 name: struct_name, ..
             } => write!(self.output, "{} {}", struct_name, name)?,
+            TypeKind::Slice { element_type } => {
+                write!(self.output, "Slice_{} {}", element_type, name)?;
+            }
         }
         Ok(())
     }
@@ -247,6 +296,7 @@ impl Emitter {
                         TypeKind::I64 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
                         TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
                         TypeKind::Array { .. } => panic!("cannot print array"),
+                        TypeKind::Slice { .. } => panic!("cannot print slice"),
                         TypeKind::Pointer { .. } => write!(self.output, "\tprintf(\"%zu\\n\", ")?,
                     }
                 } else {
@@ -267,12 +317,21 @@ impl Emitter {
             CheckedExpressionKind::Variable { name, .. } => {
                 write!(self.output, "{}", name)
             }
-            CheckedExpressionKind::ArrayIndex { array, index } => {
-                self.emit_expr(array)?;
-                write!(self.output, "[")?;
-                self.emit_expr(index)?;
-                write!(self.output, "]")
-            }
+            CheckedExpressionKind::ArrayIndex { array, index } => match array.type_kind {
+                TypeKind::Array { .. } => {
+                    self.emit_expr(array)?;
+                    write!(self.output, "[")?;
+                    self.emit_expr(index)?;
+                    write!(self.output, "]")
+                }
+                TypeKind::Slice { .. } => {
+                    self.emit_expr(array)?;
+                    write!(self.output, ".data[")?;
+                    self.emit_expr(index)?;
+                    write!(self.output, "]")
+                }
+                _ => unreachable!(),
+            },
             CheckedExpressionKind::StructLiteral {
                 name: _struct_name,
                 fields,

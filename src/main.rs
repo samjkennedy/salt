@@ -71,12 +71,10 @@ fn main() -> Result<()> {
     let mut type_checker = TypeChecker::new(&mut parser);
 
     let mut diagnostics = Vec::new();
-    let mut statements = Vec::new();
 
     while type_checker.has_next() {
-        match type_checker.check_next() {
-            Ok(statement) => statements.push(statement),
-            Err(diagnostic) => diagnostics.push(diagnostic),
+        if let Err(diagnostic) = type_checker.check_next() {
+            diagnostics.push(diagnostic)
         }
     }
 
@@ -91,7 +89,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to write C file `{}`", output_c_path))?;
 
     let mut emitter = Emitter::new(output_file);
-    emitter.emit(&statements)?;
+    emitter.emit(type_checker.module)?;
 
     println!("Generated C file: {}", output_c_path);
 
