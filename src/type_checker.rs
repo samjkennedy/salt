@@ -53,6 +53,9 @@ pub enum TypeKind {
         size: i64,
         element_type: Box<TypeKind>,
     },
+    Slice {
+        element_type: Box<TypeKind>,
+    },
     Pointer {
         reference_type: Box<TypeKind>,
     },
@@ -60,6 +63,7 @@ pub enum TypeKind {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Range,
 }
 
 impl Display for TypeKind {
@@ -73,10 +77,14 @@ impl Display for TypeKind {
             TypeKind::Array { size, element_type } => {
                 write!(f, "[{}]{}", size, element_type)
             }
+            TypeKind::Slice { element_type } => {
+                write!(f, "[]{}", element_type)
+            }
             TypeKind::Pointer { reference_type } => {
                 write!(f, "*{}", reference_type)
             }
             TypeKind::Struct { name, .. } => write!(f, "{}", name),
+            TypeKind::Range => write!(f, "range"),
         }
     }
 }
@@ -153,8 +161,10 @@ impl CheckedExpression {
                 name: _name,
                 mutable,
             } => *mutable,
-            CheckedExpressionKind::ArrayIndex { .. } => true,
-            CheckedExpressionKind::MemberAccess { .. } => true,
+            CheckedExpressionKind::ArrayIndex { array, .. } => array.is_lvalue(),
+            CheckedExpressionKind::MemberAccess { expression, .. } => expression.is_lvalue(),
+            CheckedExpressionKind::Range { .. } => false,
+            CheckedExpressionKind::ArraySlice { .. } => false,
         }
     }
 }
@@ -194,6 +204,14 @@ pub enum CheckedExpressionKind {
     MemberAccess {
         expression: Box<CheckedExpression>,
         member: String,
+    },
+    ArraySlice {
+        array: Box<CheckedExpression>,
+        range: Box<CheckedExpression>,
+    },
+    Range {
+        lower: Box<CheckedExpression>,
+        upper: Box<CheckedExpression>,
     },
 }
 
@@ -287,9 +305,31 @@ impl Scope {
     }
 }
 
+pub struct Module {
+    pub types: Vec<TypeKind>,
+    pub statements: Vec<CheckedStatement>,
+}
+
+impl Module {
+    fn new() -> Module {
+        Module {
+            types: Vec::new(),
+            statements: Vec::new(),
+        }
+    }
+
+    fn add_type(&mut self, type_kind: &TypeKind) {
+        if !self.types.contains(type_kind) {
+            self.types.push(type_kind.clone());
+        }
+    }
+}
+
 pub struct TypeChecker<'src> {
     parser: &'src mut Parser<'src>,
     scope: Vec<Scope>,
+    //TODO: move this into a Module
+    pub module: Module,
 }
 
 impl<'src> TypeChecker<'src> {
@@ -297,6 +337,7 @@ impl<'src> TypeChecker<'src> {
         TypeChecker {
             parser,
             scope: vec![Scope::new(TypeKind::Void)],
+            module: Module::new(),
         }
     }
 
@@ -304,10 +345,13 @@ impl<'src> TypeChecker<'src> {
         self.parser.has_next()
     }
 
-    pub fn check_next(&mut self) -> Result<CheckedStatement, Diagnostic> {
+    pub fn check_next(&mut self) -> Result<(), Diagnostic> {
         let statement = self.parser.parse_statement()?;
+        let checked_statement = self.check_statement(statement)?;
 
-        self.check_statement(statement)
+        self.module.statements.push(checked_statement);
+
+        Ok(())
     }
 
     fn get_identifier(&self, name: &str) -> Option<ScopedIdentifier> {
@@ -407,11 +451,11 @@ impl<'src> TypeChecker<'src> {
                 })
             }
             StatementKind::VariableDeclaration {
-                type_expression,
                 identifier,
+                type_expression,
                 initialiser,
                 ..
-            } => self.check_variable_declaration(type_expression, identifier, initialiser),
+            } => self.check_variable_declaration(identifier, type_expression, initialiser),
             StatementKind::While { condition, body } => {
                 let condition_span = condition.span;
                 let checked_condition = self.check_expr(condition)?;
@@ -620,12 +664,21 @@ impl<'src> TypeChecker<'src> {
 
     fn check_variable_declaration(
         &mut self,
-        type_expression: TypeExpression,
         name_token: Token,
+        type_expression: Option<TypeExpression>,
         initialiser: Expression,
     ) -> Result<CheckedStatement, Diagnostic> {
-        let type_kind = self.bind_type_kind(type_expression)?;
         let variable_name = name_token.text;
+        let initialiser_span = initialiser.span;
+        let checked_initialiser = self.check_expr(initialiser)?;
+
+        let type_kind = if let Some(type_expression) = type_expression {
+            let type_kind = self.bind_type_kind(type_expression)?;
+            Self::expect_type(&type_kind, &checked_initialiser.type_kind, initialiser_span)?;
+            type_kind
+        } else {
+            checked_initialiser.type_kind.clone()
+        };
 
         self.scope
             .last_mut()
@@ -638,10 +691,6 @@ impl<'src> TypeChecker<'src> {
                 },
                 name_token.span,
             )?;
-        let initialiser_span = initialiser.span;
-        let checked_initialiser = self.check_expr(initialiser)?;
-
-        Self::expect_type(&type_kind, &checked_initialiser.type_kind, initialiser_span)?;
 
         Ok(CheckedStatement::VariableDeclaration {
             type_kind,
@@ -650,7 +699,7 @@ impl<'src> TypeChecker<'src> {
         })
     }
 
-    fn check_expr(&self, expr: Expression) -> Result<CheckedExpression, Diagnostic> {
+    fn check_expr(&mut self, expr: Expression) -> Result<CheckedExpression, Diagnostic> {
         match expr.kind {
             ExpressionKind::BoolLiteral(value) => Ok(CheckedExpression {
                 kind: CheckedExpressionKind::BoolLiteral(value),
@@ -707,7 +756,7 @@ impl<'src> TypeChecker<'src> {
             ExpressionKind::Unary { operator, operand } => {
                 let checked_operand = self.check_expr(*operand)?;
 
-                let checked_op = Self::get_unary_op(&operator, &checked_operand, expr.span)?;
+                let checked_op = self.get_unary_op(&operator, &checked_operand, expr.span)?;
 
                 Ok(CheckedExpression {
                     type_kind: checked_op.get_result_type(),
@@ -858,28 +907,74 @@ impl<'src> TypeChecker<'src> {
                 let index_span = index.span;
 
                 let checked_array = self.check_expr(*array)?;
+                let checked_index = self.check_expr(*index)?;
 
-                if let TypeKind::Array {
-                    size: _size,
-                    element_type,
-                } = &checked_array.type_kind.clone()
-                {
-                    let checked_index = self.check_expr(*index)?;
-                    Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
+                match &checked_array.type_kind.clone() {
+                    TypeKind::Array {
+                        size: _size,
+                        element_type,
+                    } => {
+                        if let TypeKind::I64 = checked_index.type_kind {
+                            Self::expect_type(
+                                &TypeKind::I64,
+                                &checked_index.type_kind,
+                                index_span,
+                            )?;
 
-                    Ok(CheckedExpression {
-                        type_kind: *element_type.clone(),
-                        kind: CheckedExpressionKind::ArrayIndex {
-                            array: Box::new(checked_array),
-                            index: Box::new(checked_index),
-                        },
-                    })
-                } else {
-                    Err(Diagnostic {
+                            Ok(CheckedExpression {
+                                type_kind: *element_type.clone(),
+                                kind: CheckedExpressionKind::ArrayIndex {
+                                    array: Box::new(checked_array),
+                                    index: Box::new(checked_index),
+                                },
+                            })
+                        } else if let TypeKind::Range = checked_index.type_kind {
+                            Self::expect_type(
+                                &TypeKind::Range,
+                                &checked_index.type_kind,
+                                index_span,
+                            )?;
+
+                            let slice_type = TypeKind::Slice {
+                                element_type: element_type.clone(),
+                            };
+                            self.module.add_type(&slice_type);
+
+                            Ok(CheckedExpression {
+                                type_kind: TypeKind::Slice {
+                                    element_type: element_type.clone(),
+                                },
+                                kind: CheckedExpressionKind::ArraySlice {
+                                    array: Box::new(checked_array),
+                                    range: Box::new(checked_index),
+                                },
+                            })
+                        } else {
+                            Err(Diagnostic::new(
+                                format!(
+                                    "cannot index array with type `{}`",
+                                    checked_index.type_kind
+                                ),
+                                index_span,
+                            ))
+                        }
+                    }
+                    TypeKind::Slice { element_type } => {
+                        Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
+
+                        Ok(CheckedExpression {
+                            type_kind: *element_type.clone(),
+                            kind: CheckedExpressionKind::ArrayIndex {
+                                array: Box::new(checked_array),
+                                index: Box::new(checked_index),
+                            },
+                        })
+                    }
+                    _ => Err(Diagnostic {
                         message: format!("cannot index type `{}`", checked_array.type_kind),
                         hint: None,
                         span: expr.span,
-                    })
+                    }),
                 }
             }
             ExpressionKind::StructLiteral {
@@ -989,6 +1084,24 @@ impl<'src> TypeChecker<'src> {
 
                 Self::check_member_access(&member, checked_expression, expression_type, expr_span)
             }
+            ExpressionKind::Range { lower, upper } => {
+                let lower_span = lower.span;
+                let upper_span = upper.span;
+
+                let checked_lower = self.check_expr(*lower)?;
+                Self::expect_type(&TypeKind::I64, &checked_lower.type_kind, lower_span)?;
+
+                let checked_upper = self.check_expr(*upper)?;
+                Self::expect_type(&TypeKind::I64, &checked_upper.type_kind, upper_span)?;
+
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::Range {
+                        lower: Box::new(checked_lower),
+                        upper: Box::new(checked_upper),
+                    },
+                    type_kind: TypeKind::Range,
+                })
+            }
         }
     }
 
@@ -1048,6 +1161,36 @@ impl<'src> TypeChecker<'src> {
                     ))
                 }
             }
+            TypeKind::Slice { element_type } => {
+                if member.text == "len" {
+                    Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::MemberAccess {
+                            expression: Box::new(checked_expression),
+                            member: member.text.clone(),
+                        },
+                        type_kind: TypeKind::I64,
+                    })
+                } else if member.text == "data" {
+                    Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::MemberAccess {
+                            expression: Box::new(checked_expression),
+                            member: member.text.clone(),
+                        },
+                        type_kind: TypeKind::Pointer {
+                            reference_type: element_type.clone(),
+                        },
+                    })
+                } else {
+                    Err(Diagnostic::with_hint(
+                        format!(
+                            "no such field `{}` on type `{}`",
+                            member.text, checked_expression.type_kind
+                        ),
+                        "available fields are: [data, len]".to_string(),
+                        expr_span,
+                    ))
+                }
+            }
             _ => Err(Diagnostic::new(
                 format!(
                     "type `{}` does not have fields",
@@ -1059,6 +1202,7 @@ impl<'src> TypeChecker<'src> {
     }
 
     fn get_unary_op(
+        &mut self,
         op: &UnaryOp,
         operand: &CheckedExpression,
         span: Span,
@@ -1069,31 +1213,44 @@ impl<'src> TypeChecker<'src> {
                     return Err(Diagnostic {
                         message: "cannot make a mutable reference to non-assignable value"
                             .to_string(),
-                        hint: Some("remove the `mut`".to_string()),
+                        hint: Some(
+                            "consider assigning the value to a mutable variable first".to_string(),
+                        ),
                         span,
                     });
                 }
-                if let TypeKind::Pointer { .. } = &operand.type_kind {
-                    Ok(CheckedUnaryOp::Mut {
+                match &operand.type_kind {
+                    TypeKind::Pointer { .. } => Ok(CheckedUnaryOp::Mut {
                         result: operand.type_kind.clone(),
-                    })
-                } else {
-                    Err(Diagnostic {
+                    }),
+                    TypeKind::Slice { .. } => Ok(CheckedUnaryOp::Mut {
+                        result: operand.type_kind.clone(),
+                    }),
+                    _ => Err(Diagnostic {
                         message: format!(
                             "cannot make a mutable reference to non-pointer type `{}`",
                             operand.type_kind
                         ),
                         hint: Some("remove the `mut`".to_string()),
                         span,
-                    })
+                    }),
                 }
             }
-            UnaryOp::Ref => Ok(CheckedUnaryOp::Ref {
-                result: TypeKind::Pointer {
-                    reference_type: Box::new(operand.type_kind.clone()),
-                },
-            }),
+            UnaryOp::Ref => match &operand.type_kind {
+                TypeKind::Array { element_type, .. } => {
+                    let slice_type = TypeKind::Slice {
+                        element_type: element_type.clone(),
+                    };
+                    self.module.add_type(&slice_type);
 
+                    Ok(CheckedUnaryOp::Ref { result: slice_type })
+                }
+                _ => Ok(CheckedUnaryOp::Ref {
+                    result: TypeKind::Pointer {
+                        reference_type: Box::new(operand.type_kind.clone()),
+                    },
+                }),
+            },
             UnaryOp::Deref => {
                 if let TypeKind::Pointer { reference_type } = &operand.type_kind {
                     Ok(CheckedUnaryOp::Deref {
@@ -1249,6 +1406,13 @@ impl<'src> TypeChecker<'src> {
                     element_type: Box::new(element_type),
                 })
             }
+            TypeExpression::Slice(_, element_type) => {
+                let element_type = self.bind_type_kind(*element_type)?;
+                Ok(TypeKind::Slice {
+                    element_type: Box::new(element_type),
+                })
+            }
+
             TypeExpression::Pointer(_, reference_type) => {
                 let reference_type = self.bind_type_kind(*reference_type)?;
                 Ok(TypeKind::Pointer {

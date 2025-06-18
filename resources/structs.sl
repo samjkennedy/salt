@@ -11,10 +11,7 @@ zero_vec(v: mut *Vec2): void {
 
 main(): void {
     v: Vec2 = Vec2 { y: 5, x: 4};
-
     print(sum(v));
-
     zero_vec(mut &v);
-
     print(sum(v));
 }

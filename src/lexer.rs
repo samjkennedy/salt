@@ -23,6 +23,7 @@ pub enum TokenKind {
     Semicolon,
     Comma,
     Dot,
+    DotDot,
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
@@ -89,7 +90,16 @@ impl<'src> Lexer<'src> {
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
                 ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
-                '.' => Ok(self.make_token(TokenKind::Dot, ".".to_owned())),
+                '.' => {
+                    self.cursor += 1;
+                    if let Some('.') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::DotDot, "..".to_owned()))
+                    } else {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::Dot, ".".to_owned()))
+                    }
+                }
                 '0'..='9' => Ok(self.lex_number()),
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
@@ -129,7 +139,7 @@ impl<'src> Lexer<'src> {
             return None;
         }
 
-        Some(self.input.as_bytes()[self.cursor] as char)
+        self.input.chars().nth(self.cursor)
     }
 
     fn skip_whitespace(&mut self) {

@@ -18,7 +18,7 @@ pub enum StatementKind {
     },
     VariableDeclaration {
         identifier: Token,
-        type_expression: TypeExpression,
+        type_expression: Option<TypeExpression>,
         initialiser: Expression,
     },
     While {
@@ -97,6 +97,10 @@ pub enum ExpressionKind {
         expression: Box<Expression>,
         member: Token,
     },
+    Range {
+        lower: Box<Expression>,
+        upper: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +114,7 @@ pub enum TypeExpression {
     Simple(Token),                          //i64, bool, Struct etc
     Array(Token, i64, Box<TypeExpression>), //[5]i64, [8][8]bool, etc
     Pointer(Token, Box<TypeExpression>),
-    //Slice(Box<TypeExpression>)
+    Slice(Token, Box<TypeExpression>),
 }
 
 impl TypeExpression {
@@ -122,6 +126,9 @@ impl TypeExpression {
             }
             TypeExpression::Pointer(star, reference_type) => {
                 Span::from_to(star.span, reference_type.span())
+            }
+            TypeExpression::Slice(open_square, element_type) => {
+                Span::from_to(open_square.span, element_type.span())
             }
         }
     }
@@ -148,6 +155,7 @@ impl Expression {
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
             ExpressionKind::MemberAccess { .. } => true,
+            ExpressionKind::Range { .. } => false,
         }
     }
 }
@@ -241,12 +249,16 @@ impl<'src> Parser<'src> {
                 match self.peek().kind {
                     TokenKind::Colon => {
                         // Looks like a var decl to me
-
-                        //TODO: allow type inference
                         self.expect(&TokenKind::Colon)?;
-                        let type_expression = self.parse_type_expression()?;
 
-                        //TODO: decide how to handle RAII
+                        //Get the type annotation if it exists
+                        let type_expression = if self.peek().kind != TokenKind::Equals {
+                            Some(self.parse_type_expression()?)
+                        } else {
+                            None
+                        };
+
+                        //TODO: decide how to handle not initialising a value
                         self.expect(&TokenKind::Equals)?;
                         let initialiser = self.parse_expression()?;
 
@@ -408,6 +420,14 @@ impl<'src> Parser<'src> {
             }
             TokenKind::OpenSquare => {
                 let open_square = self.expect(&TokenKind::OpenSquare)?;
+
+                if self.peek().kind == TokenKind::CloseSquare {
+                    self.expect(&TokenKind::CloseSquare)?;
+                    let element_type = self.parse_type_expression()?;
+
+                    return Ok(TypeExpression::Slice(open_square, Box::new(element_type)));
+                }
+
                 let size = if let TokenKind::IntLiteral(size) = self.peek().kind {
                     Ok(size)
                 } else {
@@ -607,6 +627,18 @@ impl<'src> Parser<'src> {
                     kind: ExpressionKind::MemberAccess {
                         expression: Box::new(primary),
                         member: identifier,
+                    },
+                })
+            }
+            TokenKind::DotDot => {
+                self.expect(&TokenKind::DotDot)?;
+                let upper = self.parse_expression()?;
+
+                Ok(Expression {
+                    span: Span::from_to(primary.span, upper.span),
+                    kind: ExpressionKind::Range {
+                        lower: Box::new(primary),
+                        upper: Box::new(upper),
                     },
                 })
             }
