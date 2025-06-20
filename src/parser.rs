@@ -25,6 +25,11 @@ pub enum StatementKind {
         condition: Expression,
         body: Box<Statement>,
     },
+    For {
+        iterator: Token,
+        iterable: Expression,
+        body: Box<Statement>,
+    },
     Return {
         expression: Option<Expression>,
     },
@@ -37,6 +42,9 @@ pub enum StatementKind {
         identifier: Token,
         fields: Vec<Statement>,
     },
+    //TODO labels
+    Continue,
+    Break,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +186,7 @@ pub struct Parser<'src> {
     current: Token,
     lexer: &'src mut Lexer<'src>,
     context: ParseContext,
+    allow_struct_literals: bool,
 }
 
 impl<'src> Parser<'src> {
@@ -186,6 +195,7 @@ impl<'src> Parser<'src> {
             current: lexer.next()?, //Naively assume the first character is allowed
             lexer,
             context: ParseContext::Global,
+            allow_struct_literals: true,
         })
     }
 
@@ -344,6 +354,26 @@ impl<'src> Parser<'src> {
                     },
                 })
             }
+            TokenKind::ForKeyword => {
+                let for_keyword = self.expect(&TokenKind::ForKeyword)?;
+                let iterator = self.expect_identifier()?;
+                self.expect(&TokenKind::InKeyword)?;
+
+                self.allow_struct_literals = false;
+                let iterable = self.parse_expression()?;
+                self.allow_struct_literals = true;
+
+                let body = self.parse_statement()?;
+
+                Ok(Statement {
+                    span: Span::from_to(for_keyword.span, body.span),
+                    kind: StatementKind::For {
+                        iterator,
+                        iterable,
+                        body: Box::new(body),
+                    },
+                })
+            }
             TokenKind::IfKeyword => {
                 let if_keyword = self.expect(&TokenKind::IfKeyword)?;
                 let condition = self.parse_expression()?;
@@ -392,6 +422,24 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Return {
                         expression: Some(expr),
                     },
+                })
+            }
+            TokenKind::ContinueKeyword => {
+                let continue_keyword = self.expect(&TokenKind::ContinueKeyword)?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(continue_keyword.span, semicolon.span),
+                    kind: StatementKind::Continue,
+                })
+            }
+            TokenKind::BreakKeyword => {
+                let continue_keyword = self.expect(&TokenKind::BreakKeyword)?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(continue_keyword.span, semicolon.span),
+                    kind: StatementKind::Break,
                 })
             }
             _ => {
@@ -612,7 +660,7 @@ impl<'src> Parser<'src> {
                 let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 if self.peek().kind == TokenKind::OpenParen {
                     self.parse_function_call(identifier)
-                } else if self.peek().kind == TokenKind::OpenCurly {
+                } else if self.peek().kind == TokenKind::OpenCurly && self.allow_struct_literals {
                     self.parse_struct_literal(identifier)
                 } else {
                     Ok(Expression {

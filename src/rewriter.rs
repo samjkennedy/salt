@@ -1,28 +1,37 @@
 use crate::type_checker::{
-    CheckedExpression, CheckedExpressionKind, CheckedStatement, CheckedUnaryOp, Module, TypeKind,
+    CheckedBinaryOp, CheckedExpression, CheckedExpressionKind, CheckedStatement, CheckedUnaryOp,
+    Module, TypeKind,
 };
 
-// pub struct Gensym {
-//     counter: usize,
-// }
+pub struct Gensym {
+    counter: usize,
+}
 
-// impl Gensym {
-//     pub fn new() -> Self {
-//         Gensym { counter: 0 }
-//     }
-//
-//     pub fn generate(&mut self, prefix: &str) -> String {
-//         let name = format!("{}_rewrite_{}", prefix, self.counter);
-//         self.counter += 1;
-//         name
-//     }
-// }
+impl Gensym {
+    pub fn new() -> Self {
+        Gensym { counter: 0 }
+    }
 
-pub struct Rewriter {}
+    pub fn generate(&mut self, prefix: &str) -> String {
+        let name = format!("{}_rewrite_{}", prefix, self.counter);
+        self.counter += 1;
+        name
+    }
+}
+
+pub struct Rewriter {
+    gensym: Gensym,
+}
 
 impl Rewriter {
-    pub fn rewrite(module: Module) -> Module {
-        let rewritten_statements = Self::rewrite_statements(module.statements);
+    pub fn new() -> Self {
+        Rewriter {
+            gensym: Gensym::new(),
+        }
+    }
+
+    pub fn rewrite(&mut self, module: Module) -> Module {
+        let rewritten_statements = self.rewrite_statements(module.statements);
 
         Module {
             types: module.types,
@@ -30,11 +39,11 @@ impl Rewriter {
         }
     }
 
-    fn rewrite_statements(statements: Vec<CheckedStatement>) -> Vec<CheckedStatement> {
+    fn rewrite_statements(&mut self, statements: Vec<CheckedStatement>) -> Vec<CheckedStatement> {
         let mut rewritten_statements = Vec::new();
 
         for statement in statements {
-            for rewritten_statement in Self::rewrite_statement(statement, &TypeKind::Void) {
+            for rewritten_statement in self.rewrite_statement(statement, &TypeKind::Void) {
                 rewritten_statements.push(rewritten_statement);
             }
         }
@@ -43,6 +52,7 @@ impl Rewriter {
     }
 
     fn rewrite_statement(
+        &mut self,
         statement: CheckedStatement,
         return_context: &TypeKind,
     ) -> Vec<CheckedStatement> {
@@ -54,7 +64,7 @@ impl Rewriter {
                 body,
             } => {
                 let mut rewritten_body = Vec::new();
-                for statement in Self::rewrite_statement(*body, &return_type) {
+                for statement in self.rewrite_statement(*body, &return_type) {
                     rewritten_body.push(statement);
                 }
 
@@ -68,7 +78,7 @@ impl Rewriter {
             CheckedStatement::Block(statements) => {
                 let mut rewritten_block = Vec::new();
                 for statement in statements {
-                    for rewritten_statement in Self::rewrite_statement(statement, return_context) {
+                    for rewritten_statement in self.rewrite_statement(statement, return_context) {
                         rewritten_block.push(rewritten_statement);
                     }
                 }
@@ -77,7 +87,7 @@ impl Rewriter {
             CheckedStatement::While { condition, body } => {
                 let (mut prep_stmts, rewritten_condition) =
                     Self::rewrite_expression(&condition, return_context);
-                let rewritten_body = Self::rewrite_statement(*body, return_context);
+                let rewritten_body = self.rewrite_statement(*body, return_context);
 
                 prep_stmts.push(CheckedStatement::While {
                     condition: rewritten_condition,
@@ -93,13 +103,12 @@ impl Rewriter {
             } => {
                 let (mut prep_stmts, rewritten_condition) =
                     Self::rewrite_expression(&condition, return_context);
-                let rewritten_body = Self::rewrite_statement(*body, return_context);
+                let rewritten_body = self.rewrite_statement(*body, return_context);
 
                 let rewritten_else_branch = else_branch.map(|else_branch| {
-                    Box::new(CheckedStatement::Block(Self::rewrite_statement(
-                        *else_branch,
-                        return_context,
-                    )))
+                    Box::new(CheckedStatement::Block(
+                        self.rewrite_statement(*else_branch, return_context),
+                    ))
                 });
 
                 prep_stmts.push(CheckedStatement::If {
@@ -152,6 +161,240 @@ impl Rewriter {
             }
             CheckedStatement::Parameter { .. } => vec![statement],
             CheckedStatement::Struct { .. } => vec![], //Currently handled by the module, TODO: review that
+            CheckedStatement::Continue => vec![statement],
+            CheckedStatement::Break => vec![statement],
+            CheckedStatement::For {
+                iterator,
+                iterable,
+                body,
+            } => {
+                let iterator_name =
+                    if let CheckedExpressionKind::Variable { name, .. } = iterator.kind {
+                        name.clone()
+                    } else {
+                        unreachable!()
+                    };
+                //Rewrite for loop as while
+                /*
+                for i in a {
+                    ...
+                }
+                 */
+                //into
+                /*
+                it := 0;
+                while it < a.len {
+                    i := a[it];
+                    ...
+                    i = i + 1;
+                }
+                 */
+
+                let (mut prep_stmts, rewritten_iterable) =
+                    Self::rewrite_expression(&iterable, return_context);
+
+                match &rewritten_iterable.type_kind {
+                    TypeKind::Slice { element_type } | TypeKind::Array { element_type, .. } => {
+                        let it_name = self.gensym.generate("it");
+                        let it_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: TypeKind::I64,
+                            name: it_name.clone(),
+                            initialiser: CheckedExpression {
+                                kind: CheckedExpressionKind::IntLiteral(0),
+                                type_kind: *element_type.clone(),
+                            },
+                        };
+
+                        let mut rewritten_body = Vec::new();
+
+                        let var_expr = CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: it_name.clone(),
+                                mutable: false,
+                            },
+                            type_kind: *element_type.clone(),
+                        };
+
+                        let access_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: *element_type.clone(),
+                            name: iterator_name,
+                            initialiser: CheckedExpression {
+                                kind: CheckedExpressionKind::ArrayIndex {
+                                    array: Box::new(rewritten_iterable.clone()),
+                                    index: Box::new(var_expr.clone()),
+                                },
+                                type_kind: *element_type.clone(),
+                            },
+                        };
+
+                        let increment = CheckedStatement::Expression(CheckedExpression {
+                            kind: CheckedExpressionKind::Binary {
+                                left: Box::new(var_expr.clone()),
+                                operator: CheckedBinaryOp::Assign {
+                                    result: TypeKind::I64,
+                                },
+                                right: Box::new(CheckedExpression {
+                                    kind: CheckedExpressionKind::Binary {
+                                        left: Box::new(var_expr.clone()),
+                                        operator: CheckedBinaryOp::Add {
+                                            result: TypeKind::I64,
+                                        },
+                                        right: Box::new(CheckedExpression {
+                                            kind: CheckedExpressionKind::IntLiteral(1),
+                                            type_kind: TypeKind::I64,
+                                        }),
+                                    },
+                                    type_kind: TypeKind::I64,
+                                }),
+                            },
+                            type_kind: TypeKind::Any,
+                        });
+                        rewritten_body.push(access_decl);
+                        rewritten_body.push(*body);
+                        rewritten_body.push(increment);
+
+                        let while_loop =
+                            if let TypeKind::Array { size, .. } = &rewritten_iterable.type_kind {
+                                CheckedStatement::While {
+                                    condition: CheckedExpression {
+                                        kind: CheckedExpressionKind::Binary {
+                                            left: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::Variable {
+                                                    name: it_name,
+                                                    mutable: false,
+                                                },
+                                                type_kind: TypeKind::Any,
+                                            }),
+                                            operator: CheckedBinaryOp::Lt {
+                                                result: TypeKind::Bool,
+                                            },
+                                            right: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::IntLiteral(*size),
+                                                type_kind: TypeKind::I64,
+                                            }),
+                                        },
+                                        type_kind: TypeKind::Any,
+                                    },
+                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                }
+                            } else {
+                                CheckedStatement::While {
+                                    condition: CheckedExpression {
+                                        kind: CheckedExpressionKind::Binary {
+                                            left: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::Variable {
+                                                    name: it_name,
+                                                    mutable: false,
+                                                },
+                                                type_kind: TypeKind::Any,
+                                            }),
+                                            operator: CheckedBinaryOp::Lt {
+                                                result: TypeKind::Bool,
+                                            },
+                                            right: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::MemberAccess {
+                                                    expression: Box::new(rewritten_iterable),
+                                                    member: "len".to_string(),
+                                                },
+                                                type_kind: TypeKind::I64,
+                                            }),
+                                        },
+                                        type_kind: TypeKind::Any,
+                                    },
+                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                }
+                            };
+
+                        prep_stmts.push(it_decl);
+                        prep_stmts.push(while_loop);
+
+                        prep_stmts
+                    }
+                    TypeKind::Range => {
+                        let (lower, upper) = if let CheckedExpressionKind::Range { lower, upper } =
+                            rewritten_iterable.kind
+                        {
+                            (lower, upper)
+                        } else {
+                            unreachable!()
+                        };
+                        let it_name = self.gensym.generate("it");
+                        let it_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: TypeKind::I64,
+                            name: it_name.clone(),
+                            initialiser: *lower,
+                        };
+
+                        let mut rewritten_body = Vec::new();
+
+                        let var_expr = CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: it_name.clone(),
+                                mutable: false,
+                            },
+                            type_kind: TypeKind::I64,
+                        };
+
+                        let iterator_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: TypeKind::I64,
+                            name: iterator_name,
+                            initialiser: var_expr.clone(),
+                        };
+
+                        let increment = CheckedStatement::Expression(CheckedExpression {
+                            kind: CheckedExpressionKind::Binary {
+                                left: Box::new(var_expr.clone()),
+                                operator: CheckedBinaryOp::Assign {
+                                    result: TypeKind::I64,
+                                },
+                                right: Box::new(CheckedExpression {
+                                    kind: CheckedExpressionKind::Binary {
+                                        left: Box::new(var_expr.clone()),
+                                        operator: CheckedBinaryOp::Add {
+                                            result: TypeKind::I64,
+                                        },
+                                        right: Box::new(CheckedExpression {
+                                            kind: CheckedExpressionKind::IntLiteral(1),
+                                            type_kind: TypeKind::I64,
+                                        }),
+                                    },
+                                    type_kind: TypeKind::I64,
+                                }),
+                            },
+                            type_kind: TypeKind::Any,
+                        });
+                        rewritten_body.push(iterator_decl);
+                        rewritten_body.push(*body);
+                        rewritten_body.push(increment);
+
+                        let while_loop = CheckedStatement::While {
+                            condition: CheckedExpression {
+                                kind: CheckedExpressionKind::Binary {
+                                    left: Box::new(CheckedExpression {
+                                        kind: CheckedExpressionKind::Variable {
+                                            name: it_name,
+                                            mutable: false,
+                                        },
+                                        type_kind: TypeKind::Any,
+                                    }),
+                                    operator: CheckedBinaryOp::Lt {
+                                        result: TypeKind::Bool,
+                                    },
+                                    right: Box::new(*upper),
+                                },
+                                type_kind: TypeKind::Any,
+                            },
+                            body: Box::new(CheckedStatement::Block(rewritten_body)),
+                        };
+
+                        prep_stmts.push(it_decl);
+                        prep_stmts.push(while_loop);
+
+                        prep_stmts
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
