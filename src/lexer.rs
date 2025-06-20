@@ -33,6 +33,8 @@ pub enum TokenKind {
     IfKeyword,
     ElseKeyword,
     StructKeyword,
+    ContinueKeyword,
+    BreakKeyword,
     EndOfFile,
 }
 
@@ -243,6 +245,16 @@ impl<'src> Lexer<'src> {
             },
             "struct" => Token {
                 kind: TokenKind::StructKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "continue" => Token {
+                kind: TokenKind::ContinueKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "break" => Token {
+                kind: TokenKind::BreakKeyword,
                 span,
                 text: value.to_owned(),
             },

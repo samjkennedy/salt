@@ -40,6 +40,8 @@ pub enum CheckedStatement {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Continue,
+    Break,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -359,7 +361,7 @@ impl<'src> TypeChecker<'src> {
 
     pub fn check_next(&mut self) -> Result<(), Diagnostic> {
         let statement = self.parser.parse_statement()?;
-        let checked_statement = self.check_statement(statement)?;
+        let checked_statement = self.check_statement(statement, false)?;
 
         self.module.statements.push(checked_statement);
 
@@ -394,7 +396,11 @@ impl<'src> TypeChecker<'src> {
             .clone()
     }
 
-    fn check_statement(&mut self, statement: Statement) -> Result<CheckedStatement, Diagnostic> {
+    fn check_statement(
+        &mut self,
+        statement: Statement,
+        in_loop: bool,
+    ) -> Result<CheckedStatement, Diagnostic> {
         match statement.kind {
             StatementKind::Expression(expr) => {
                 let checked_expr = self.check_expr(expr)?;
@@ -405,7 +411,7 @@ impl<'src> TypeChecker<'src> {
 
                 self.scope.push(Scope::new(self.get_return_context()));
                 for statement in statements {
-                    checked_statements.push(self.check_statement(statement)?);
+                    checked_statements.push(self.check_statement(statement, in_loop)?);
                 }
                 self.scope.pop();
 
@@ -480,7 +486,7 @@ impl<'src> TypeChecker<'src> {
                     condition_span,
                 )?;
 
-                let body = Box::new(self.check_statement(*body)?);
+                let body = Box::new(self.check_statement(*body, true)?);
 
                 Ok(CheckedStatement::While {
                     condition: checked_condition,
@@ -496,11 +502,11 @@ impl<'src> TypeChecker<'src> {
                 let condition = self.check_expr(condition)?;
 
                 Self::expect_type(&TypeKind::Bool, &condition.type_kind, condition_span)?;
-                let body = self.check_statement(*body)?;
+                let body = self.check_statement(*body, in_loop)?;
 
                 match else_branch {
                     Some(else_branch) => {
-                        let else_branch = self.check_statement(*else_branch)?;
+                        let else_branch = self.check_statement(*else_branch, in_loop)?;
 
                         Ok(CheckedStatement::If {
                             condition,
@@ -564,6 +570,24 @@ impl<'src> TypeChecker<'src> {
             StatementKind::Parameter { .. } => {
                 unreachable!("should be checked by FunctionDefinition")
             }
+            StatementKind::Continue => {
+                if !in_loop {
+                    return Err(Diagnostic::new(
+                        "`continue` may only be used in a loop".to_string(),
+                        statement.span,
+                    ));
+                }
+                Ok(CheckedStatement::Continue)
+            }
+            StatementKind::Break => {
+                if !in_loop {
+                    return Err(Diagnostic::new(
+                        "`break` may only be used in a loop".to_string(),
+                        statement.span,
+                    ));
+                }
+                Ok(CheckedStatement::Break)
+            }
         }
     }
 
@@ -626,7 +650,7 @@ impl<'src> TypeChecker<'src> {
         //     )?;
 
         self.scope.push(Scope::new(return_type_kind.clone()));
-        let checked_body = self.check_statement(*body)?;
+        let checked_body = self.check_statement(*body, false)?;
         self.scope.pop();
 
         self.scope.pop();
@@ -686,6 +710,8 @@ impl<'src> TypeChecker<'src> {
                 }
             }
             CheckedStatement::Return { .. } => true,
+            CheckedStatement::Continue => false,
+            CheckedStatement::Break => false,
         }
     }
 

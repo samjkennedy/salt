@@ -152,6 +152,8 @@ impl Rewriter {
             }
             CheckedStatement::Parameter { .. } => vec![statement],
             CheckedStatement::Struct { .. } => vec![], //Currently handled by the module, TODO: review that
+            CheckedStatement::Continue => vec![statement],
+            CheckedStatement::Break => vec![statement],
         }
     }
 

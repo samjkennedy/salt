@@ -37,6 +37,9 @@ pub enum StatementKind {
         identifier: Token,
         fields: Vec<Statement>,
     },
+    //TODO labels
+    Continue,
+    Break,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +395,24 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Return {
                         expression: Some(expr),
                     },
+                })
+            }
+            TokenKind::ContinueKeyword => {
+                let continue_keyword = self.expect(&TokenKind::ContinueKeyword)?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(continue_keyword.span, semicolon.span),
+                    kind: StatementKind::Continue,
+                })
+            }
+            TokenKind::BreakKeyword => {
+                let continue_keyword = self.expect(&TokenKind::BreakKeyword)?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(continue_keyword.span, semicolon.span),
+                    kind: StatementKind::Break,
                 })
             }
             _ => {

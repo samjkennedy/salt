@@ -201,6 +201,8 @@ impl Emitter {
                 }
                 writeln!(self.output, "}} {};", name)
             }
+            CheckedStatement::Continue => writeln!(self.output, "continue;"),
+            CheckedStatement::Break => writeln!(self.output, "break;"),
         }
     }
 
