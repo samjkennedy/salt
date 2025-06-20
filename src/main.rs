@@ -1,3 +1,4 @@
+use crate::rewriter::Rewriter;
 use anyhow::{Context, Result};
 use emitter::Emitter;
 use lexer::Lexer;
@@ -12,6 +13,7 @@ mod diagnostic;
 mod emitter;
 mod lexer;
 mod parser;
+mod rewriter;
 mod type_checker;
 
 fn main() -> Result<()> {
@@ -85,11 +87,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let rewritten_module = Rewriter::rewrite(type_checker.module);
+
     let output_file = File::create(&output_c_path)
         .with_context(|| format!("Failed to write C file `{}`", output_c_path))?;
 
     let mut emitter = Emitter::new(output_file);
-    emitter.emit(type_checker.module)?;
+    emitter.emit(rewritten_module)?;
 
     println!("Generated C file: {}", output_c_path);
 
