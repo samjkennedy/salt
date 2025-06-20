@@ -189,7 +189,11 @@ impl Rewriter {
                     i = i + 1;
                 }
                  */
-                match &iterable.type_kind {
+
+                let (mut prep_stmts, rewritten_iterable) =
+                    Self::rewrite_expression(&iterable, return_context);
+
+                match &rewritten_iterable.type_kind {
                     TypeKind::Slice { element_type } | TypeKind::Array { element_type, .. } => {
                         let it_name = self.gensym.generate("it");
                         let it_decl = CheckedStatement::VariableDeclaration {
@@ -216,7 +220,7 @@ impl Rewriter {
                             name: iterator_name,
                             initialiser: CheckedExpression {
                                 kind: CheckedExpressionKind::ArrayIndex {
-                                    array: Box::new(iterable.clone()),
+                                    array: Box::new(rewritten_iterable.clone()),
                                     index: Box::new(var_expr.clone()),
                                 },
                                 type_kind: *element_type.clone(),
@@ -249,66 +253,71 @@ impl Rewriter {
                         rewritten_body.push(*body);
                         rewritten_body.push(increment);
 
-                        let while_loop = if let TypeKind::Array { size, .. } = &iterable.type_kind {
-                            CheckedStatement::While {
-                                condition: CheckedExpression {
-                                    kind: CheckedExpressionKind::Binary {
-                                        left: Box::new(CheckedExpression {
-                                            kind: CheckedExpressionKind::Variable {
-                                                name: it_name,
-                                                mutable: false,
+                        let while_loop =
+                            if let TypeKind::Array { size, .. } = &rewritten_iterable.type_kind {
+                                CheckedStatement::While {
+                                    condition: CheckedExpression {
+                                        kind: CheckedExpressionKind::Binary {
+                                            left: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::Variable {
+                                                    name: it_name,
+                                                    mutable: false,
+                                                },
+                                                type_kind: TypeKind::Any,
+                                            }),
+                                            operator: CheckedBinaryOp::Lt {
+                                                result: TypeKind::Bool,
                                             },
-                                            type_kind: TypeKind::Any,
-                                        }),
-                                        operator: CheckedBinaryOp::Lt {
-                                            result: TypeKind::Bool,
+                                            right: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::IntLiteral(*size),
+                                                type_kind: TypeKind::I64,
+                                            }),
                                         },
-                                        right: Box::new(CheckedExpression {
-                                            kind: CheckedExpressionKind::IntLiteral(*size),
-                                            type_kind: TypeKind::I64,
-                                        }),
+                                        type_kind: TypeKind::Any,
                                     },
-                                    type_kind: TypeKind::Any,
-                                },
-                                body: Box::new(CheckedStatement::Block(rewritten_body)),
-                            }
-                        } else {
-                            CheckedStatement::While {
-                                condition: CheckedExpression {
-                                    kind: CheckedExpressionKind::Binary {
-                                        left: Box::new(CheckedExpression {
-                                            kind: CheckedExpressionKind::Variable {
-                                                name: it_name,
-                                                mutable: false,
+                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                }
+                            } else {
+                                CheckedStatement::While {
+                                    condition: CheckedExpression {
+                                        kind: CheckedExpressionKind::Binary {
+                                            left: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::Variable {
+                                                    name: it_name,
+                                                    mutable: false,
+                                                },
+                                                type_kind: TypeKind::Any,
+                                            }),
+                                            operator: CheckedBinaryOp::Lt {
+                                                result: TypeKind::Bool,
                                             },
-                                            type_kind: TypeKind::Any,
-                                        }),
-                                        operator: CheckedBinaryOp::Lt {
-                                            result: TypeKind::Bool,
+                                            right: Box::new(CheckedExpression {
+                                                kind: CheckedExpressionKind::MemberAccess {
+                                                    expression: Box::new(rewritten_iterable),
+                                                    member: "len".to_string(),
+                                                },
+                                                type_kind: TypeKind::I64,
+                                            }),
                                         },
-                                        right: Box::new(CheckedExpression {
-                                            kind: CheckedExpressionKind::MemberAccess {
-                                                expression: Box::new(iterable),
-                                                member: "len".to_string(),
-                                            },
-                                            type_kind: TypeKind::I64,
-                                        }),
+                                        type_kind: TypeKind::Any,
                                     },
-                                    type_kind: TypeKind::Any,
-                                },
-                                body: Box::new(CheckedStatement::Block(rewritten_body)),
-                            }
-                        };
+                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                }
+                            };
 
-                        vec![it_decl, while_loop]
+                        prep_stmts.push(it_decl);
+                        prep_stmts.push(while_loop);
+
+                        prep_stmts
                     }
                     TypeKind::Range => {
-                        let (lower, upper) =
-                            if let CheckedExpressionKind::Range { lower, upper } = iterable.kind {
-                                (lower, upper)
-                            } else {
-                                unreachable!()
-                            };
+                        let (lower, upper) = if let CheckedExpressionKind::Range { lower, upper } =
+                            rewritten_iterable.kind
+                        {
+                            (lower, upper)
+                        } else {
+                            unreachable!()
+                        };
                         let it_name = self.gensym.generate("it");
                         let it_decl = CheckedStatement::VariableDeclaration {
                             type_kind: TypeKind::I64,
@@ -378,7 +387,10 @@ impl Rewriter {
                             body: Box::new(CheckedStatement::Block(rewritten_body)),
                         };
 
-                        vec![it_decl, while_loop]
+                        prep_stmts.push(it_decl);
+                        prep_stmts.push(while_loop);
+
+                        prep_stmts
                     }
                     _ => unreachable!(),
                 }

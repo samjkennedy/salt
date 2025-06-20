@@ -21,6 +21,8 @@ main(): void {
         print(i);
     }
 
+    for i in 0..3 print(i);
+
     s := a[2..4];
     for i in s {
         print(i);
