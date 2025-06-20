@@ -20,6 +20,14 @@ main(): void {
 
     a := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
+    for i in a {
+        print(i);
+        guard i < 5 else {
+            continue;
+        }
+        print(i);
+    }
+
     guard maybe(false) else {
         print(0);
         return;

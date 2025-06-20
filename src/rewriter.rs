@@ -323,12 +323,12 @@ impl Rewriter {
                             type_kind: TypeKind::Any,
                         });
                         new_body.push(access_decl);
+                        new_body.push(increment);
 
                         let rewritten_body = self.rewrite_statement(*body, return_context);
                         for statement in rewritten_body {
                             new_body.push(statement);
                         }
-                        new_body.push(increment);
 
                         let while_loop =
                             if let TypeKind::Array { size, .. } = &rewritten_iterable.type_kind {
