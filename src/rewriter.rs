@@ -119,7 +119,59 @@ impl Rewriter {
 
                 prep_stmts
             }
-            CheckedStatement::Guard { .. } => todo!(),
+            CheckedStatement::Guard { expression, body } => {
+                let type_kind = expression.type_kind.clone();
+
+                match type_kind {
+                    TypeKind::Bool => {
+                        let if_statement = CheckedStatement::If {
+                            condition: CheckedExpression {
+                                kind: CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Not {
+                                        result: TypeKind::Bool,
+                                    },
+                                    operand: Box::new(CheckedExpression {
+                                        kind: CheckedExpressionKind::Parenthesized(Box::new(
+                                            expression.clone(),
+                                        )),
+                                        type_kind,
+                                    }),
+                                },
+                                type_kind: TypeKind::Bool,
+                            },
+                            body: body.clone(),
+                            else_branch: None,
+                        };
+
+                        vec![if_statement]
+                    }
+                    TypeKind::Option { .. } => {
+                        let has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::MemberAccess {
+                                expression: Box::new(expression.clone()),
+                                member: "has_value".to_string(),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let not_has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Not {
+                                    result: TypeKind::Bool,
+                                },
+                                operand: Box::new(has_value),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let if_statement = CheckedStatement::If {
+                            condition: not_has_value,
+                            body: body.clone(),
+                            else_branch: None,
+                        };
+                        vec![if_statement]
+                    }
+                    _ => unreachable!(),
+                }
+            }
             CheckedStatement::Return { expression } => {
                 if let Some(expression) = expression {
                     let (mut prep_stmts, rewritten_expression) =
@@ -226,7 +278,7 @@ impl Rewriter {
                             },
                         };
 
-                        let mut rewritten_body = Vec::new();
+                        let mut new_body = Vec::new();
 
                         let var_expr = CheckedExpression {
                             kind: CheckedExpressionKind::Variable {
@@ -270,9 +322,13 @@ impl Rewriter {
                             },
                             type_kind: TypeKind::Any,
                         });
-                        rewritten_body.push(access_decl);
-                        rewritten_body.push(*body);
-                        rewritten_body.push(increment);
+                        new_body.push(access_decl);
+
+                        let rewritten_body = self.rewrite_statement(*body, return_context);
+                        for statement in rewritten_body {
+                            new_body.push(statement);
+                        }
+                        new_body.push(increment);
 
                         let while_loop =
                             if let TypeKind::Array { size, .. } = &rewritten_iterable.type_kind {
@@ -296,7 +352,7 @@ impl Rewriter {
                                         },
                                         type_kind: TypeKind::Any,
                                     },
-                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                    body: Box::new(CheckedStatement::Block(new_body)),
                                 }
                             } else {
                                 CheckedStatement::While {
@@ -322,7 +378,7 @@ impl Rewriter {
                                         },
                                         type_kind: TypeKind::Any,
                                     },
-                                    body: Box::new(CheckedStatement::Block(rewritten_body)),
+                                    body: Box::new(CheckedStatement::Block(new_body)),
                                 }
                             };
 

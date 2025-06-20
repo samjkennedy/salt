@@ -38,6 +38,10 @@ pub enum StatementKind {
         body: Box<Statement>,
         else_branch: Option<Box<Statement>>,
     },
+    Guard {
+        expression: Expression,
+        body: Box<Statement>,
+    },
     Struct {
         identifier: Token,
         fields: Vec<Statement>,
@@ -411,6 +415,24 @@ impl<'src> Parser<'src> {
                     })
                 }
             }
+            TokenKind::GuardKeyword => {
+                let guard_keyword = self.expect(&TokenKind::GuardKeyword)?;
+                let expression = self.parse_expression()?;
+                self.expect(&TokenKind::ElseKeyword)?;
+
+                self.allow_struct_literals = false;
+                //TODO: if this isn't a block statement, you end up with double semicolons
+                let body = self.parse_statement()?;
+                self.allow_struct_literals = true;
+
+                Ok(Statement {
+                    span: Span::from_to(guard_keyword.span, body.span),
+                    kind: StatementKind::Guard {
+                        expression,
+                        body: Box::new(body),
+                    },
+                })
+            }
             TokenKind::ReturnKeyword => {
                 let return_keyword = self.expect(&TokenKind::ReturnKeyword)?;
 
@@ -677,7 +699,6 @@ impl<'src> Parser<'src> {
                     })
                 }
             }
-
             TokenKind::GuardKeyword => {
                 let guard_keyword = self.expect(&TokenKind::GuardKeyword)?;
                 let expression = self.parse_expression()?;

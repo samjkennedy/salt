@@ -564,7 +564,7 @@ impl<'src> TypeChecker<'src> {
                     }
                 }?;
 
-                let checked_body = Box::new(self.check_statement(*body, false)?);
+                let checked_body = Box::new(self.check_statement(*body, true)?);
 
                 self.scope.pop();
 
@@ -668,6 +668,33 @@ impl<'src> TypeChecker<'src> {
                     ));
                 }
                 Ok(CheckedStatement::Break)
+            }
+            StatementKind::Guard { expression, body } => {
+                let expression_span = expression.span;
+                let body_span = body.span;
+                let checked_expression = self.check_expr(expression)?;
+                let checked_body = self.check_statement(*body, in_loop)?; //TODO: eventually expressions will need to know if they're in a loop or not
+
+                if !Self::all_branches_exit_scope(&checked_body) {
+                    return Err(Diagnostic::new(
+                        "else body of guard statement does not exit the current scope".to_string(),
+                        body_span,
+                    ));
+                }
+
+                match &checked_expression.type_kind.clone() {
+                    TypeKind::Option { .. } | TypeKind::Bool => Ok(CheckedStatement::Guard {
+                        expression: checked_expression,
+                        body: Box::new(checked_body),
+                    }),
+                    _ => Err(Diagnostic::new(
+                        format!(
+                            "cannot guard against type `{}`",
+                            checked_expression.type_kind.clone()
+                        ),
+                        expression_span,
+                    )),
+                }
             }
         }
     }
@@ -806,7 +833,7 @@ impl<'src> TypeChecker<'src> {
                     return false;
                 }
                 //This doesn't seem quite right
-                Self::all_branches_return(statements.last().unwrap())
+                Self::all_branches_exit_scope(statements.last().unwrap())
             }
             CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
