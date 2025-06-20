@@ -112,6 +112,10 @@ pub enum ExpressionKind {
     OptionUnwrap {
         expression: Box<Expression>,
     },
+    Guard {
+        expression: Box<Expression>,
+        body: Box<Statement>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +176,7 @@ impl Expression {
             ExpressionKind::MemberAccess { .. } => true,
             ExpressionKind::Range { .. } => false,
             ExpressionKind::OptionUnwrap { .. } => false, //TODO can you assign to optional unwrap?
+            ExpressionKind::Guard { .. } => false,
         }
     }
 }
@@ -376,7 +381,10 @@ impl<'src> Parser<'src> {
             }
             TokenKind::IfKeyword => {
                 let if_keyword = self.expect(&TokenKind::IfKeyword)?;
+
+                self.allow_struct_literals = false;
                 let condition = self.parse_expression()?;
+                self.allow_struct_literals = true;
 
                 let body = self.parse_statement()?;
 
@@ -668,6 +676,25 @@ impl<'src> Parser<'src> {
                         kind: ExpressionKind::Variable(identifier),
                     })
                 }
+            }
+
+            TokenKind::GuardKeyword => {
+                let guard_keyword = self.expect(&TokenKind::GuardKeyword)?;
+                let expression = self.parse_expression()?;
+                self.expect(&TokenKind::ElseKeyword)?;
+
+                self.allow_struct_literals = false;
+                //TODO: if this isn't a block statement, you end up with double semicolons
+                let body = self.parse_statement()?;
+                self.allow_struct_literals = true;
+
+                Ok(Expression {
+                    span: Span::from_to(guard_keyword.span, body.span),
+                    kind: ExpressionKind::Guard {
+                        expression: Box::new(expression),
+                        body: Box::new(body),
+                    },
+                })
             }
             _ => {
                 self.lexer.next()?;

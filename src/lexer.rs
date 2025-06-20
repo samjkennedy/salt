@@ -37,6 +37,7 @@ pub enum TokenKind {
     BreakKeyword,
     ForKeyword,
     InKeyword,
+    GuardKeyword,
     EndOfFile,
 }
 
@@ -267,6 +268,11 @@ impl<'src> Lexer<'src> {
             },
             "in" => Token {
                 kind: TokenKind::InKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "guard" => Token {
+                kind: TokenKind::GuardKeyword,
                 span,
                 text: value.to_owned(),
             },

@@ -119,17 +119,38 @@ impl Rewriter {
 
                 prep_stmts
             }
+            CheckedStatement::Guard { .. } => todo!(),
             CheckedStatement::Return { expression } => {
                 if let Some(expression) = expression {
                     let (mut prep_stmts, rewritten_expression) =
                         Self::rewrite_expression(&expression, return_context);
 
-                    let return_statement = CheckedStatement::Return {
-                        expression: Some(rewritten_expression),
-                    };
+                    //TODO: This should get handled by rewrite_expression by passing in an assign context rather than the return context
+                    //      Or if instead allow explicit some like `return ?10;`
+                    let return_statement =
+                        if let TypeKind::Option { reference_type } = return_context {
+                            CheckedStatement::Return {
+                                expression: Some(Self::some_optional_expression(
+                                    rewritten_expression,
+                                    return_context,
+                                    reference_type,
+                                )),
+                            }
+                        } else {
+                            CheckedStatement::Return {
+                                expression: Some(rewritten_expression),
+                            }
+                        };
                     prep_stmts.push(return_statement);
 
                     prep_stmts
+                } else if let TypeKind::Option { reference_type } = return_context {
+                    vec![CheckedStatement::Return {
+                        expression: Some(Self::none_optional_expression(
+                            return_context,
+                            reference_type,
+                        )),
+                    }]
                 } else {
                     vec![CheckedStatement::Return { expression: None }]
                 }
@@ -402,7 +423,7 @@ impl Rewriter {
         expr: &CheckedExpression,
         return_context: &TypeKind,
     ) -> (Vec<CheckedStatement>, CheckedExpression) {
-        let (prep_stmts, rewritten_expression) = match &expr.kind {
+        match &expr.kind {
             CheckedExpressionKind::OptionUnwrap { expression } => {
                 let type_kind = expression.type_kind.clone();
 
@@ -675,22 +696,71 @@ impl Rewriter {
                     },
                 )
             }
-        };
-        if let TypeKind::Option { reference_type } = return_context {
-            return if let TypeKind::Option { .. } = &rewritten_expression.type_kind {
-                (prep_stmts, rewritten_expression)
-            } else {
-                (
-                    prep_stmts,
-                    Self::some_optional_expression(
-                        rewritten_expression,
-                        return_context,
-                        reference_type,
-                    ),
-                )
-            };
+            CheckedExpressionKind::Guard { expression, body } => {
+                //TODO: rewrite expression
+                let type_kind = expression.type_kind.clone();
+
+                match type_kind {
+                    TypeKind::Bool => {
+                        let if_statement = CheckedStatement::If {
+                            condition: CheckedExpression {
+                                kind: CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Not {
+                                        result: TypeKind::Bool,
+                                    },
+                                    operand: Box::new(CheckedExpression {
+                                        kind: CheckedExpressionKind::Parenthesized(Box::new(
+                                            *expression.clone(),
+                                        )),
+                                        type_kind,
+                                    }),
+                                },
+                                type_kind: TypeKind::Bool,
+                            },
+                            body: body.clone(),
+                            else_branch: None,
+                        };
+
+                        (vec![if_statement], *expression.clone())
+                    }
+                    TypeKind::Option { .. } => {
+                        let has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::MemberAccess {
+                                expression: expression.clone(),
+                                member: "has_value".to_string(),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let not_has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Not {
+                                    result: TypeKind::Bool,
+                                },
+                                operand: Box::new(has_value),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let if_statement = CheckedStatement::If {
+                            condition: not_has_value,
+                            body: body.clone(),
+                            else_branch: None,
+                        };
+
+                        (
+                            vec![if_statement],
+                            CheckedExpression {
+                                kind: CheckedExpressionKind::MemberAccess {
+                                    expression: expression.clone(),
+                                    member: "value".to_string(),
+                                },
+                                type_kind,
+                            },
+                        )
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
-        (prep_stmts, rewritten_expression)
     }
 
     fn none_optional_expression(
