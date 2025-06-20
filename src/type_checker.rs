@@ -28,6 +28,11 @@ pub enum CheckedStatement {
         condition: CheckedExpression,
         body: Box<CheckedStatement>,
     },
+    For {
+        iterator: CheckedExpression,
+        iterable: CheckedExpression,
+        body: Box<CheckedStatement>,
+    },
     If {
         condition: CheckedExpression,
         body: Box<CheckedStatement>,
@@ -493,6 +498,73 @@ impl<'src> TypeChecker<'src> {
                     body,
                 })
             }
+            StatementKind::For {
+                iterator,
+                iterable,
+                body,
+            } => {
+                let iterable_span = iterable.span;
+                self.scope.push(Scope::new(self.get_return_context()));
+
+                let checked_iterable = self.check_expr(iterable)?;
+                let checked_iterator = match &checked_iterable.type_kind {
+                    TypeKind::Array { element_type, .. } | TypeKind::Slice { element_type } => {
+                        self.try_declare_identifier(
+                            ScopedIdentifier::Variable {
+                                name: iterator.text.clone(),
+                                type_kind: *element_type.clone(),
+                                mutable: false,
+                            },
+                            iterator.span,
+                        )?;
+
+                        Ok(CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: iterator.text,
+                                mutable: false,
+                            },
+                            type_kind: *element_type.clone(),
+                        })
+                    }
+                    TypeKind::Range => {
+                        self.try_declare_identifier(
+                            ScopedIdentifier::Variable {
+                                name: iterator.text.clone(),
+                                type_kind: TypeKind::I64,
+                                mutable: false,
+                            },
+                            iterator.span,
+                        )?;
+
+                        Ok(CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: iterator.text,
+                                mutable: false,
+                            },
+                            type_kind: TypeKind::I64,
+                        })
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "cannot iterate type `{}`",
+                                checked_iterable.type_kind.clone()
+                            ),
+                            iterable_span,
+                        ))
+                    }
+                }?;
+
+                let checked_body = Box::new(self.check_statement(*body, false)?);
+
+                self.scope.pop();
+
+                Ok(CheckedStatement::For {
+                    iterator: checked_iterator,
+                    iterable: checked_iterable,
+                    body: checked_body,
+                })
+            }
             StatementKind::If {
                 condition,
                 body,
@@ -697,6 +769,7 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
+            CheckedStatement::For { body, .. } => Self::all_branches_return(body),
             CheckedStatement::If {
                 condition: _condition,
                 body,

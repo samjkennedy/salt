@@ -203,6 +203,7 @@ impl Emitter {
             }
             CheckedStatement::Continue => writeln!(self.output, "continue;"),
             CheckedStatement::Break => writeln!(self.output, "break;"),
+            CheckedStatement::For { .. } => unreachable!("should have been rewritten into while"),
         }
     }
 

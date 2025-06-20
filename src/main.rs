@@ -87,7 +87,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let rewritten_module = Rewriter::rewrite(type_checker.module);
+    let mut rewriter = Rewriter::new();
+
+    let rewritten_module = rewriter.rewrite(type_checker.module);
 
     let output_file = File::create(&output_c_path)
         .with_context(|| format!("Failed to write C file `{}`", output_c_path))?;

@@ -25,6 +25,11 @@ pub enum StatementKind {
         condition: Expression,
         body: Box<Statement>,
     },
+    For {
+        iterator: Token,
+        iterable: Expression,
+        body: Box<Statement>,
+    },
     Return {
         expression: Option<Expression>,
     },
@@ -181,6 +186,7 @@ pub struct Parser<'src> {
     current: Token,
     lexer: &'src mut Lexer<'src>,
     context: ParseContext,
+    allow_struct_literals: bool,
 }
 
 impl<'src> Parser<'src> {
@@ -189,6 +195,7 @@ impl<'src> Parser<'src> {
             current: lexer.next()?, //Naively assume the first character is allowed
             lexer,
             context: ParseContext::Global,
+            allow_struct_literals: true,
         })
     }
 
@@ -343,6 +350,26 @@ impl<'src> Parser<'src> {
                     span: Span::from_to(while_keyword.span, body.span),
                     kind: StatementKind::While {
                         condition,
+                        body: Box::new(body),
+                    },
+                })
+            }
+            TokenKind::ForKeyword => {
+                let for_keyword = self.expect(&TokenKind::ForKeyword)?;
+                let iterator = self.expect_identifier()?;
+                self.expect(&TokenKind::InKeyword)?;
+
+                self.allow_struct_literals = false;
+                let iterable = self.parse_expression()?;
+                self.allow_struct_literals = true;
+
+                let body = self.parse_statement()?;
+
+                Ok(Statement {
+                    span: Span::from_to(for_keyword.span, body.span),
+                    kind: StatementKind::For {
+                        iterator,
+                        iterable,
                         body: Box::new(body),
                     },
                 })
@@ -633,7 +660,7 @@ impl<'src> Parser<'src> {
                 let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 if self.peek().kind == TokenKind::OpenParen {
                     self.parse_function_call(identifier)
-                } else if self.peek().kind == TokenKind::OpenCurly {
+                } else if self.peek().kind == TokenKind::OpenCurly && self.allow_struct_literals {
                     self.parse_struct_literal(identifier)
                 } else {
                     Ok(Expression {
