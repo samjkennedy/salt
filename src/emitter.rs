@@ -203,7 +203,8 @@ impl Emitter {
             }
             CheckedStatement::Continue => writeln!(self.output, "continue;"),
             CheckedStatement::Break => writeln!(self.output, "break;"),
-            CheckedStatement::For { .. } => unreachable!("should have been rewritten into while"),
+            CheckedStatement::For { .. } => unreachable!("should have been rewritten"),
+            CheckedStatement::Guard { .. } => unreachable!("should have been rewritten"),
         }
     }
 
@@ -411,7 +412,7 @@ impl Emitter {
             CheckedExpressionKind::ArraySlice { .. } => {
                 todo!()
             }
-            CheckedExpressionKind::OptionUnwrap { .. } => {
+            CheckedExpressionKind::OptionUnwrap { .. } | CheckedExpressionKind::Guard { .. } => {
                 unreachable!("should have been removed in the rewriting step")
             }
         }

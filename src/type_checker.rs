@@ -38,6 +38,10 @@ pub enum CheckedStatement {
         body: Box<CheckedStatement>,
         else_branch: Option<Box<CheckedStatement>>,
     },
+    Guard {
+        expression: CheckedExpression,
+        body: Box<CheckedStatement>,
+    },
     Return {
         expression: Option<CheckedExpression>,
     },
@@ -181,6 +185,7 @@ impl CheckedExpression {
             CheckedExpressionKind::Range { .. } => false,
             CheckedExpressionKind::ArraySlice { .. } => false,
             CheckedExpressionKind::OptionUnwrap { .. } => false,
+            CheckedExpressionKind::Guard { .. } => false,
         }
     }
 }
@@ -231,6 +236,10 @@ pub enum CheckedExpressionKind {
     },
     OptionUnwrap {
         expression: Box<CheckedExpression>,
+    },
+    Guard {
+        expression: Box<CheckedExpression>,
+        body: Box<CheckedStatement>,
     },
 }
 
@@ -555,7 +564,7 @@ impl<'src> TypeChecker<'src> {
                     }
                 }?;
 
-                let checked_body = Box::new(self.check_statement(*body, false)?);
+                let checked_body = Box::new(self.check_statement(*body, true)?);
 
                 self.scope.pop();
 
@@ -659,6 +668,33 @@ impl<'src> TypeChecker<'src> {
                     ));
                 }
                 Ok(CheckedStatement::Break)
+            }
+            StatementKind::Guard { expression, body } => {
+                let expression_span = expression.span;
+                let body_span = body.span;
+                let checked_expression = self.check_expr(expression)?;
+                let checked_body = self.check_statement(*body, in_loop)?; //TODO: eventually expressions will need to know if they're in a loop or not
+
+                if !Self::all_branches_exit_scope(&checked_body) {
+                    return Err(Diagnostic::new(
+                        "else body of guard statement does not exit the current scope".to_string(),
+                        body_span,
+                    ));
+                }
+
+                match &checked_expression.type_kind.clone() {
+                    TypeKind::Option { .. } | TypeKind::Bool => Ok(CheckedStatement::Guard {
+                        expression: checked_expression,
+                        body: Box::new(checked_body),
+                    }),
+                    _ => Err(Diagnostic::new(
+                        format!(
+                            "cannot guard against type `{}`",
+                            checked_expression.type_kind.clone()
+                        ),
+                        expression_span,
+                    )),
+                }
             }
         }
     }
@@ -782,9 +818,45 @@ impl<'src> TypeChecker<'src> {
                     None => false, //TODO technically if condition is always true and body returns, this is true
                 }
             }
+            CheckedStatement::Guard { .. } => false,
             CheckedStatement::Return { .. } => true,
             CheckedStatement::Continue => false,
             CheckedStatement::Break => false,
+        }
+    }
+
+    fn all_branches_exit_scope(statement: &CheckedStatement) -> bool {
+        match statement {
+            CheckedStatement::Expression(_) => false,
+            CheckedStatement::Block(statements) => {
+                if statements.is_empty() {
+                    return false;
+                }
+                //This doesn't seem quite right
+                Self::all_branches_exit_scope(statements.last().unwrap())
+            }
+            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
+            CheckedStatement::Parameter { .. } => unreachable!(),
+            CheckedStatement::VariableDeclaration { .. } => false,
+            CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
+            CheckedStatement::For { body, .. } => Self::all_branches_exit_scope(body),
+            CheckedStatement::If {
+                condition: _condition,
+                body,
+                else_branch,
+            } => {
+                match else_branch {
+                    Some(else_branch) => {
+                        Self::all_branches_exit_scope(body)
+                            && Self::all_branches_exit_scope(else_branch)
+                    }
+                    None => false, //TODO technically if condition is always true and body returns, this is true
+                }
+            }
+            CheckedStatement::Guard { .. } => false,
+            CheckedStatement::Return { .. } => true,
+            CheckedStatement::Continue => true,
+            CheckedStatement::Break => true,
         }
     }
 
@@ -1262,6 +1334,43 @@ impl<'src> TypeChecker<'src> {
                         ),
                         expression_span,
                     ))
+                }
+            }
+            ExpressionKind::Guard { expression, body } => {
+                let expression_span = expression.span;
+                let body_span = body.span;
+                let checked_expression = self.check_expr(*expression)?;
+                let checked_body = self.check_statement(*body, false)?; //TODO: eventually expressions will need to know if they're in a loop or not
+
+                if !Self::all_branches_exit_scope(&checked_body) {
+                    return Err(Diagnostic::new(
+                        "else body of guard expression does not exit the current scope".to_string(),
+                        body_span,
+                    ));
+                }
+
+                match &checked_expression.type_kind.clone() {
+                    TypeKind::Option { reference_type } => Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::Guard {
+                            expression: Box::new(checked_expression),
+                            body: Box::new(checked_body),
+                        },
+                        type_kind: *reference_type.clone(),
+                    }),
+                    TypeKind::Bool => Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::Guard {
+                            expression: Box::new(checked_expression),
+                            body: Box::new(checked_body),
+                        },
+                        type_kind: TypeKind::Bool,
+                    }),
+                    _ => Err(Diagnostic::new(
+                        format!(
+                            "cannot guard against type `{}`",
+                            checked_expression.type_kind.clone()
+                        ),
+                        expression_span,
+                    )),
                 }
             }
         }
