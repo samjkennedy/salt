@@ -10,8 +10,6 @@ pub struct Emitter {
     output: File,
 }
 
-// struct Rewriter {}
-
 impl Emitter {
     pub fn new(output: File) -> Self {
         Emitter { output }
@@ -38,7 +36,19 @@ impl Emitter {
                     writeln!(self.output, "\tbool has_value;")?;
                     writeln!(self.output, "}} Option_{};", reference_type)?;
                 }
-                _ => todo!(),
+                TypeKind::Struct { name, fields } => {
+                    writeln!(self.output, "typedef struct {{")?;
+                    for field in fields {
+                        if let CheckedStatement::Parameter { type_kind, name } = field {
+                            self.emit_var_decl_type(&type_kind, &name)?;
+                            writeln!(self.output, ";")?;
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    writeln!(self.output, "}} {};", name)?;
+                }
+                _ => todo!("{:?}", type_kind),
             }
         }
 
@@ -288,19 +298,9 @@ impl Emitter {
             CheckedExpressionKind::Unary { operator, operand } => {
                 match operator {
                     CheckedUnaryOp::Mut { .. } => {}
+                    CheckedUnaryOp::Not { .. } => write!(self.output, "!")?,
                     CheckedUnaryOp::Ref { .. } => write!(self.output, " &")?,
                     CheckedUnaryOp::Deref { .. } => write!(self.output, " *")?,
-                    CheckedUnaryOp::Some { result } => {
-                        write!(self.output, "(Option_{}", result)?;
-                        write!(self.output, ") {{")?;
-
-                        write!(self.output, " .value=")?;
-                        self.emit_expr(operand)?;
-                        write!(self.output, ",")?;
-
-                        write!(self.output, " .has_value=true")?;
-                        writeln!(self.output, " }};")?
-                    }
                 }
                 self.emit_expr(operand)
             }
@@ -336,7 +336,7 @@ impl Emitter {
                             write!(self.output, " ? \"true\" : \"false\")")?;
                             return Ok(());
                         }
-                        TypeKind::I64 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
+                        TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
                         TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
                         TypeKind::Array { .. } => panic!("cannot print array"),
                         TypeKind::Slice { .. } => panic!("cannot print slice"),
@@ -407,6 +407,9 @@ impl Emitter {
             CheckedExpressionKind::Range { .. } => unreachable!("should not be emitted"),
             CheckedExpressionKind::ArraySlice { .. } => {
                 todo!()
+            }
+            CheckedExpressionKind::OptionUnwrap { .. } => {
+                unreachable!("should have been removed in the rewriting step")
             }
         }
     }

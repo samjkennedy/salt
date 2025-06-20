@@ -101,6 +101,9 @@ pub enum ExpressionKind {
         lower: Box<Expression>,
         upper: Box<Expression>,
     },
+    OptionUnwrap {
+        expression: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +163,7 @@ impl Expression {
             ExpressionKind::ArrayIndex { .. } => true,
             ExpressionKind::MemberAccess { .. } => true,
             ExpressionKind::Range { .. } => false,
+            ExpressionKind::OptionUnwrap { .. } => false, //TODO can you assign to optional unwrap?
         }
     }
 }
@@ -290,6 +294,8 @@ impl<'src> Parser<'src> {
                             self.parse_binary_expression_right(0, array_index)?
                         } else if self.peek().kind == TokenKind::OpenCurly {
                             todo!("struct literals!")
+                        } else if self.peek().kind == TokenKind::Question {
+                            todo!("optional unwrap!")
                         } else if self.peek().kind == TokenKind::Dot {
                             let expr = Expression {
                                 span: identifier.span,
@@ -558,7 +564,7 @@ impl<'src> Parser<'src> {
     fn parse_primary_expression(&mut self) -> Result<Expression, Diagnostic> {
         let token = self.peek();
 
-        let primary = match token.kind {
+        let mut primary = match token.kind {
             TokenKind::TrueKeyword => {
                 self.next()?;
                 Ok(Expression {
@@ -605,15 +611,15 @@ impl<'src> Parser<'src> {
             TokenKind::Identifier(identifier) if self.context == ParseContext::Function => {
                 let identifier = self.expect(&TokenKind::Identifier(identifier))?;
                 if self.peek().kind == TokenKind::OpenParen {
-                    return self.parse_function_call(identifier);
+                    self.parse_function_call(identifier)
+                } else if self.peek().kind == TokenKind::OpenCurly {
+                    self.parse_struct_literal(identifier)
+                } else {
+                    Ok(Expression {
+                        span: identifier.span,
+                        kind: ExpressionKind::Variable(identifier),
+                    })
                 }
-                if self.peek().kind == TokenKind::OpenCurly {
-                    return self.parse_struct_literal(identifier);
-                }
-                Ok(Expression {
-                    span: identifier.span,
-                    kind: ExpressionKind::Variable(identifier),
-                })
             }
             _ => {
                 self.lexer.next()?;
@@ -625,35 +631,47 @@ impl<'src> Parser<'src> {
             }
         }?;
 
-        match self.peek().kind {
-            //TODO: these two need to be applied after every expression recursively
-            TokenKind::OpenSquare => self.parse_array_index(primary),
-            TokenKind::Dot => {
-                self.expect(&TokenKind::Dot)?;
-                let identifier = self.expect_identifier()?; //TODO: could be int literal for tuples? x.0, x.1?
+        loop {
+            primary = match self.peek().kind {
+                //TODO: these two need to be applied after every expression recursively
+                TokenKind::OpenSquare => self.parse_array_index(primary)?,
+                TokenKind::Dot => {
+                    self.expect(&TokenKind::Dot)?;
+                    let identifier = self.expect_identifier()?; //TODO: could be int literal for tuples? x.0, x.1?
 
-                Ok(Expression {
-                    span: Span::from_to(primary.span, identifier.span),
-                    kind: ExpressionKind::MemberAccess {
-                        expression: Box::new(primary),
-                        member: identifier,
-                    },
-                })
-            }
-            TokenKind::DotDot => {
-                self.expect(&TokenKind::DotDot)?;
-                let upper = self.parse_expression()?;
+                    Expression {
+                        span: Span::from_to(primary.span, identifier.span),
+                        kind: ExpressionKind::MemberAccess {
+                            expression: Box::new(primary),
+                            member: identifier,
+                        },
+                    }
+                }
+                TokenKind::DotDot => {
+                    self.expect(&TokenKind::DotDot)?;
+                    let upper = self.parse_expression()?;
 
-                Ok(Expression {
-                    span: Span::from_to(primary.span, upper.span),
-                    kind: ExpressionKind::Range {
-                        lower: Box::new(primary),
-                        upper: Box::new(upper),
-                    },
-                })
+                    Expression {
+                        span: Span::from_to(primary.span, upper.span),
+                        kind: ExpressionKind::Range {
+                            lower: Box::new(primary),
+                            upper: Box::new(upper),
+                        },
+                    }
+                }
+                TokenKind::Question => {
+                    let question = self.expect(&TokenKind::Question)?;
+                    Expression {
+                        span: Span::from_to(primary.span, question.span),
+                        kind: ExpressionKind::OptionUnwrap {
+                            expression: Box::new(primary),
+                        },
+                    }
+                }
+                _ => break,
             }
-            _ => Ok(primary),
         }
+        Ok(primary)
     }
 
     fn parse_function_call(&mut self, identifier: Token) -> Result<Expression, Diagnostic> {

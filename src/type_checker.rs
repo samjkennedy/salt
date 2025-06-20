@@ -124,19 +124,19 @@ impl CheckedBinaryOp {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CheckedUnaryOp {
+    Not { result: TypeKind },
     Mut { result: TypeKind },
     Ref { result: TypeKind },
     Deref { result: TypeKind },
-    Some { result: TypeKind },
 }
 
 impl CheckedUnaryOp {
     fn get_result_type(&self) -> TypeKind {
         match self {
+            CheckedUnaryOp::Not { result } => result.clone(),
             CheckedUnaryOp::Mut { result } => result.clone(),
             CheckedUnaryOp::Ref { result } => result.clone(),
             CheckedUnaryOp::Deref { result } => result.clone(),
-            CheckedUnaryOp::Some { result } => result.clone(),
         }
     }
 }
@@ -173,6 +173,7 @@ impl CheckedExpression {
             CheckedExpressionKind::MemberAccess { expression, .. } => expression.is_lvalue(),
             CheckedExpressionKind::Range { .. } => false,
             CheckedExpressionKind::ArraySlice { .. } => false,
+            CheckedExpressionKind::OptionUnwrap { .. } => false,
         }
     }
 }
@@ -220,6 +221,9 @@ pub enum CheckedExpressionKind {
     Range {
         lower: Box<CheckedExpression>,
         upper: Box<CheckedExpression>,
+    },
+    OptionUnwrap {
+        expression: Box<CheckedExpression>,
     },
 }
 
@@ -446,6 +450,8 @@ impl<'src> TypeChecker<'src> {
                     fields: checked_fields.clone(),
                 };
 
+                self.module.add_type(&struct_type);
+
                 self.try_declare_identifier(
                     ScopedIdentifier::Type {
                         type_kind: struct_type,
@@ -530,18 +536,8 @@ impl<'src> TypeChecker<'src> {
                                 expr_span,
                             )?;
 
-                            let optional_expression = CheckedExpression {
-                                type_kind: checked_expression_type_kind.clone(),
-                                kind: CheckedExpressionKind::Unary {
-                                    operator: CheckedUnaryOp::Some {
-                                        result: checked_expression_type_kind.clone(),
-                                    },
-                                    operand: Box::new(checked_expression),
-                                },
-                            };
-
                             return Ok(CheckedStatement::Return {
-                                expression: Some(optional_expression),
+                                expression: Some(checked_expression),
                             });
                         }
                         return_type => Self::expect_type(
@@ -557,6 +553,7 @@ impl<'src> TypeChecker<'src> {
                 }
                 None => match self.get_return_context() {
                     TypeKind::Void => Ok(CheckedStatement::Return { expression: None }),
+                    TypeKind::Option { .. } => Ok(CheckedStatement::Return { expression: None }),
                     expected => Err(Diagnostic {
                         message: format!("expected return value of `{}`", expected),
                         hint: None,
@@ -1132,6 +1129,42 @@ impl<'src> TypeChecker<'src> {
                     type_kind: TypeKind::Range,
                 })
             }
+            ExpressionKind::OptionUnwrap { expression } => {
+                let expression_span = expr.span;
+                let checked_expression = self.check_expr(*expression)?;
+
+                if let TypeKind::Option { reference_type } = &checked_expression.type_kind {
+                    match self.get_return_context() {
+                        TypeKind::Void => {
+                            //gucci
+                        }
+                        TypeKind::Option { reference_type: inner } => {
+                            Self::expect_type(reference_type, &inner, expression_span)?;
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                format!("cannot unwrap optional type `{}` in non-void or non-optional return context `{}`", checked_expression.type_kind, self.get_return_context()),
+                                expression_span,
+                            ))
+                        }
+                    }
+
+                    Ok(CheckedExpression {
+                        type_kind: *reference_type.clone(),
+                        kind: CheckedExpressionKind::OptionUnwrap {
+                            expression: Box::new(checked_expression),
+                        },
+                    })
+                } else {
+                    Err(Diagnostic::new(
+                        format!(
+                            "cannot unwrap non-optional type `{}`",
+                            checked_expression.type_kind
+                        ),
+                        expression_span,
+                    ))
+                }
+            }
         }
     }
 
@@ -1221,6 +1254,11 @@ impl<'src> TypeChecker<'src> {
                     ))
                 }
             }
+            TypeKind::Option { reference_type } => Err(Diagnostic::with_hint(
+                format!("option `?{}` does not have fields", reference_type),
+                "consider unwrapping the option with `?`".to_string(),
+                expr_span,
+            )),
             _ => Err(Diagnostic::new(
                 format!(
                     "type `{}` does not have fields",
