@@ -572,6 +572,7 @@ impl Rewriter {
             }
             CheckedExpressionKind::IntLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::BoolLiteral(_) => (vec![], expr.clone()),
+            CheckedExpressionKind::StringLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::Parenthesized(expr) => {
                 let (prep_statements, rewritten_expr) =
                     Self::rewrite_expression(expr, return_context);

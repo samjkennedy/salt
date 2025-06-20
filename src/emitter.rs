@@ -111,8 +111,15 @@ impl Emitter {
             } => {
                 self.emit_var_decl_type(type_kind, name)?;
                 if let TypeKind::Slice { .. } = type_kind {
+                    if let CheckedExpressionKind::ArrayIndex { .. } = &initialiser.kind {
+                        write!(self.output, " = ")?;
+                        self.emit_expr(initialiser)?;
+                        writeln!(self.output, ";")?;
+                        return Ok(());
+                    }
+
                     writeln!(self.output, ";")?;
-                    write!(self.output, "{}.data = &", name)?;
+                    write!(self.output, "{}.data = ", name)?;
 
                     //TODO: This is a mess and should be done at a rewriter stage
                     match &initialiser.kind {
@@ -120,6 +127,7 @@ impl Emitter {
                             operator: CheckedUnaryOp::Ref { .. },
                             operand,
                         } => {
+                            write!(self.output, "&")?;
                             self.emit_expr(operand)?;
                             writeln!(self.output, "[0];")?;
                             if let TypeKind::Array { size, .. } = operand.type_kind {
@@ -130,21 +138,40 @@ impl Emitter {
                         }
                         CheckedExpressionKind::ArraySlice { array, range } => {
                             if let CheckedExpressionKind::Range { lower, upper } = &range.kind {
-                                //start pointer
-                                self.emit_expr(array)?;
-                                write!(self.output, "[")?;
-                                self.emit_expr(lower)?;
-                                writeln!(self.output, "];")?;
+                                if let TypeKind::Slice { .. } = &array.type_kind {
+                                    write!(self.output, "&")?;
+                                    self.emit_expr(array)?;
+                                    write!(self.output, ".data")?;
+                                    write!(self.output, "[")?;
+                                    self.emit_expr(lower)?;
+                                    writeln!(self.output, "];")?;
+                                    write!(self.output, "{}.len = ", name)?;
+                                    self.emit_expr(upper)?;
+                                    write!(self.output, " - ")?;
+                                    self.emit_expr(lower)?;
+                                    writeln!(self.output, ";")
+                                } else {
+                                    write!(self.output, "&")?;
+                                    //start pointer
+                                    self.emit_expr(array)?;
+                                    write!(self.output, "[")?;
+                                    self.emit_expr(lower)?;
+                                    writeln!(self.output, "];")?;
 
-                                //len
-                                write!(self.output, "{}.len = ", name)?;
-                                self.emit_expr(upper)?;
-                                write!(self.output, " - ")?;
-                                self.emit_expr(lower)?;
-                                writeln!(self.output, ";")
+                                    //len
+                                    write!(self.output, "{}.len = ", name)?;
+                                    self.emit_expr(upper)?;
+                                    write!(self.output, " - ")?;
+                                    self.emit_expr(lower)?;
+                                    writeln!(self.output, ";")
+                                }
                             } else {
                                 unreachable!()
                             }
+                        }
+                        CheckedExpressionKind::StringLiteral(value) => {
+                            writeln!(self.output, "\"{}\";", value)?;
+                            writeln!(self.output, "{}.len = {};", name, value.len())
                         }
                         _ => todo!("initialising slices with {:?}", initialiser.kind),
                     }
@@ -213,8 +240,10 @@ impl Emitter {
             TypeKind::Any => unreachable!(),
             TypeKind::Void => write!(self.output, "void")?,
             TypeKind::Bool => write!(self.output, "bool")?,
+            TypeKind::Char => write!(self.output, "char")?,
             TypeKind::I64 => write!(self.output, "long")?,
             TypeKind::F32 => write!(self.output, "float")?,
+            // TypeKind::String => write!(self.output, "const char*")?,
             TypeKind::Array {
                 size: _size,
                 element_type,
@@ -230,7 +259,10 @@ impl Emitter {
             TypeKind::Option { reference_type } => {
                 write!(self.output, "Option_{}", reference_type)?
             }
-            TypeKind::Slice { .. } => todo!(),
+            TypeKind::Slice { element_type } => {
+                write!(self.output, "Slice_")?;
+                self.emit_type(element_type)?;
+            }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
         Ok(())
@@ -241,8 +273,10 @@ impl Emitter {
             TypeKind::Any => unreachable!(),
             TypeKind::Void => write!(self.output, "void {}", name)?, //TODO void variables? Remove this
             TypeKind::Bool => write!(self.output, "bool {}", name)?,
+            TypeKind::Char => write!(self.output, "char {}", name)?,
             TypeKind::I64 => write!(self.output, "long {}", name)?,
             TypeKind::F32 => write!(self.output, "float {}", name)?,
+            // TypeKind::String => write!(self.output, "const char *{}", name)?,
             TypeKind::Array { size, element_type } => {
                 self.emit_type(element_type)?;
                 write!(self.output, " {}[{}]", name, size)?;
@@ -269,6 +303,14 @@ impl Emitter {
         match &expr.kind {
             CheckedExpressionKind::BoolLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::IntLiteral(value) => write!(self.output, "{}", value),
+            CheckedExpressionKind::StringLiteral(value) => {
+                write!(
+                    self.output,
+                    "(Slice_char) {{ .data = \"{}\", .len = {} }}",
+                    value,
+                    value.len()
+                )
+            }
             CheckedExpressionKind::Parenthesized(expr) => {
                 write!(self.output, "(")?;
                 self.emit_expr(expr)?;
@@ -328,7 +370,7 @@ impl Emitter {
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
                 if name == "print" {
-                    match arguments[0].type_kind {
+                    match &arguments[0].type_kind {
                         TypeKind::Any => unreachable!(),
                         TypeKind::Void => panic!("cannot print void"),
                         TypeKind::Struct { .. } => panic!("cannot print structs"),
@@ -340,11 +382,26 @@ impl Emitter {
                             write!(self.output, " ? \"true\" : \"false\")")?;
                             return Ok(());
                         }
+                        TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", ")?,
                         TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
                         TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
                         TypeKind::Array { .. } => panic!("cannot print array"),
-                        TypeKind::Slice { .. } => panic!("cannot print slice"),
-                        TypeKind::Pointer { .. } => write!(self.output, "\tprintf(\"%zu\\n\", ")?,
+                        TypeKind::Slice { element_type } => {
+                            if **element_type == TypeKind::Char {
+                                write!(self.output, "\tprintf(\"%.*s\\n\", ",)?;
+                                self.emit_expr(&arguments[0])?;
+                                write!(self.output, ".len, ")?;
+                            } else {
+                                panic!("cannot print slice")
+                            }
+                        }
+                        TypeKind::Pointer { reference_type } => {
+                            if TypeKind::Char == **reference_type {
+                                write!(self.output, "\tprintf(\"%s\\n\", ")?
+                            } else {
+                                write!(self.output, "\tprintf(\"%zu\\n\", ")?
+                            }
+                        }
                     }
                 } else {
                     write!(self.output, "{}(", name)?;
@@ -409,8 +466,29 @@ impl Emitter {
                 }
             }
             CheckedExpressionKind::Range { .. } => unreachable!("should not be emitted"),
-            CheckedExpressionKind::ArraySlice { .. } => {
-                todo!()
+            CheckedExpressionKind::ArraySlice { array, range } => {
+                if let CheckedExpressionKind::Range { lower, upper } = &range.kind {
+                    if let TypeKind::Slice { element_type } = &array.type_kind {
+                        //I think this only happens if you're reslicing a slice in a parameter... keep it as an expression
+
+                        write!(self.output, "(Slice_")?;
+                        self.emit_type(element_type)?;
+                        write!(self.output, ") {{ .data=&")?;
+                        self.emit_expr(array)?;
+                        write!(self.output, ".data[")?;
+                        self.emit_expr(lower)?;
+                        write!(self.output, "], .len=")?;
+                        self.emit_expr(upper)?;
+                        write!(self.output, "-")?;
+                        self.emit_expr(lower)?;
+                        write!(self.output, " }}")?;
+
+                        return Ok(());
+                    } else {
+                        todo!()
+                    }
+                }
+                unreachable!()
             }
             CheckedExpressionKind::OptionUnwrap { .. } | CheckedExpressionKind::Guard { .. } => {
                 unreachable!("should have been removed in the rewriting step")

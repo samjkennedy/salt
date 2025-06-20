@@ -58,8 +58,10 @@ pub enum TypeKind {
     Any, //Only temp for print for now
     Void,
     Bool,
+    Char,
     I64,
     F32,
+    // String, TODO save this for CString
     Array {
         size: i64,
         element_type: Box<TypeKind>,
@@ -86,6 +88,7 @@ impl Display for TypeKind {
             TypeKind::Any => write!(f, "any"),
             TypeKind::Void => write!(f, "void"),
             TypeKind::Bool => write!(f, "bool"),
+            TypeKind::Char => write!(f, "char"),
             TypeKind::I64 => write!(f, "i64"),
             TypeKind::F32 => write!(f, "f32"),
             TypeKind::Array { size, element_type } => {
@@ -163,6 +166,7 @@ impl CheckedExpression {
         match &self.kind {
             CheckedExpressionKind::BoolLiteral(_) => false,
             CheckedExpressionKind::IntLiteral(_) => false,
+            CheckedExpressionKind::StringLiteral(_) => false,
             CheckedExpressionKind::Parenthesized(_) => false,
             CheckedExpressionKind::ArrayLiteral(_) => false,
             CheckedExpressionKind::StructLiteral { .. } => false,
@@ -194,6 +198,7 @@ impl CheckedExpression {
 pub enum CheckedExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
+    StringLiteral(String),
     Parenthesized(Box<CheckedExpression>),
     ArrayLiteral(Vec<CheckedExpression>),
     Binary {
@@ -907,6 +912,12 @@ impl<'src> TypeChecker<'src> {
                 kind: CheckedExpressionKind::IntLiteral(value),
                 type_kind: TypeKind::I64,
             }),
+            ExpressionKind::StringLiteral(value) => Ok(CheckedExpression {
+                kind: CheckedExpressionKind::StringLiteral(value),
+                type_kind: TypeKind::Slice {
+                    element_type: Box::new(TypeKind::Char),
+                },
+            }),
             ExpressionKind::Parenthesized(expr) => {
                 let checked_expr = self.check_expr(*expr)?;
                 Ok(CheckedExpression {
@@ -1108,10 +1119,7 @@ impl<'src> TypeChecker<'src> {
                 let checked_index = self.check_expr(*index)?;
 
                 match &checked_array.type_kind.clone() {
-                    TypeKind::Array {
-                        size: _size,
-                        element_type,
-                    } => {
+                    TypeKind::Array { element_type, .. } | TypeKind::Slice { element_type } => {
                         if let TypeKind::I64 = checked_index.type_kind {
                             Self::expect_type(
                                 &TypeKind::I64,
@@ -1156,17 +1164,6 @@ impl<'src> TypeChecker<'src> {
                                 index_span,
                             ))
                         }
-                    }
-                    TypeKind::Slice { element_type } => {
-                        Self::expect_type(&TypeKind::I64, &checked_index.type_kind, index_span)?;
-
-                        Ok(CheckedExpression {
-                            type_kind: *element_type.clone(),
-                            kind: CheckedExpressionKind::ArrayIndex {
-                                array: Box::new(checked_array),
-                                index: Box::new(checked_index),
-                            },
-                        })
                     }
                     _ => Err(Diagnostic {
                         message: format!("cannot index type `{}`", checked_array.type_kind),
@@ -1661,6 +1658,13 @@ impl<'src> TypeChecker<'src> {
                 "bool" => Ok(TypeKind::Bool),
                 "i64" => Ok(TypeKind::I64),
                 "f32" => Ok(TypeKind::F32),
+                "String" => {
+                    let slice_char_type = TypeKind::Slice {
+                        element_type: Box::new(TypeKind::Char),
+                    };
+                    self.module.add_type(&slice_char_type);
+                    Ok(slice_char_type)
+                }
                 type_name => {
                     if let Some(ScopedIdentifier::Type { type_kind }) =
                         self.get_identifier(type_name)
