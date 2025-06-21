@@ -70,6 +70,7 @@ pub enum BinaryOp {
     Mod,
     Lt,
     Gt,
+    Eq,
     Assign,
 }
 
@@ -877,7 +878,8 @@ impl<'src> Parser<'src> {
             BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
             BinaryOp::Add | BinaryOp::Sub => 4,
             BinaryOp::Lt | BinaryOp::Gt => 3,
-            BinaryOp::Assign => 1,
+            BinaryOp::Assign => 2,
+            BinaryOp::Eq => 1,
         }
     }
 
@@ -891,6 +893,7 @@ impl<'src> Parser<'src> {
             TokenKind::OpenAngle => Some(BinaryOp::Lt),
             TokenKind::CloseAngle => Some(BinaryOp::Gt),
             TokenKind::Equals => Some(BinaryOp::Assign),
+            TokenKind::EqualsEquals => Some(BinaryOp::Eq),
             _ => None,
         }
     }

@@ -312,7 +312,9 @@ impl Emitter {
                 self.emit_type(element_type)?;
             }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
-            TypeKind::Enum { .. } => todo!(),
+            TypeKind::Enum { tag, .. } => {
+                self.emit_type(tag)?;
+            }
         }
         Ok(())
     }
@@ -420,6 +422,7 @@ impl Emitter {
                     CheckedBinaryOp::Mod { .. } => write!(self.output, " % ")?,
                     CheckedBinaryOp::Lt { .. } => write!(self.output, " < ")?,
                     CheckedBinaryOp::Gt { .. } => write!(self.output, " > ")?,
+                    CheckedBinaryOp::Eq { .. } => write!(self.output, " == ")?,
                     CheckedBinaryOp::Assign { .. } => write!(self.output, " = ")?,
                 }
                 self.emit_expr(right)

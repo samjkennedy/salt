@@ -12,6 +12,7 @@ pub enum TokenKind {
     Percent,
     Ampersand,
     Equals,
+    EqualsEquals,
     OpenParen,
     CloseParen,
     OpenCurly,
@@ -87,7 +88,16 @@ impl<'src> Lexer<'src> {
                 '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
                 '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
                 '&' => Ok(self.make_token(TokenKind::Ampersand, "&".to_owned())),
-                '=' => Ok(self.make_token(TokenKind::Equals, "=".to_owned())),
+                '=' => {
+                    self.cursor += 1;
+                    if let Some('=') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::EqualsEquals, "==".to_owned()))
+                    } else {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::Equals, "=".to_owned()))
+                    }
+                }
                 '(' => Ok(self.make_token(TokenKind::OpenParen, "(".to_owned())),
                 ')' => Ok(self.make_token(TokenKind::CloseParen, ")".to_owned())),
                 '{' => Ok(self.make_token(TokenKind::OpenCurly, "{".to_owned())),

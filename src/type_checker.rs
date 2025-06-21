@@ -127,6 +127,7 @@ pub enum CheckedBinaryOp {
     Mod { result: TypeKind },
     Lt { result: TypeKind },
     Gt { result: TypeKind },
+    Eq { result: TypeKind },
     Assign { result: TypeKind },
 }
 
@@ -140,6 +141,7 @@ impl CheckedBinaryOp {
             CheckedBinaryOp::Mod { result } => result.clone(),
             CheckedBinaryOp::Lt { result } => result.clone(),
             CheckedBinaryOp::Gt { result } => result.clone(),
+            CheckedBinaryOp::Eq { result } => result.clone(),
             CheckedBinaryOp::Assign { result } => result.clone(),
         }
     }
@@ -866,7 +868,7 @@ impl<'src> TypeChecker<'src> {
 
         if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
             return Err(Diagnostic {
-                message: "not all branches return".to_string(),
+                message: "not all branches return a value".to_string(),
                 hint: None,
                 span: name_token.span,
             });
@@ -1753,6 +1755,12 @@ impl<'src> TypeChecker<'src> {
                     });
                 }
                 Ok(CheckedBinaryOp::Assign { result: right })
+            }
+            BinaryOp::Eq => {
+                Self::expect_type(&left, &right, span)?;
+                Ok(CheckedBinaryOp::Eq {
+                    result: TypeKind::Bool,
+                })
             }
         }
     }
