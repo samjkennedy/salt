@@ -300,8 +300,8 @@ impl Emitter {
                 write!(self.output, "[]")?
             }
             TypeKind::Pointer { reference_type } => {
-                write!(self.output, "*")?;
-                self.emit_type(reference_type)?
+                self.emit_type(reference_type)?;
+                write!(self.output, " *")?
             }
             TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
             TypeKind::Option { reference_type } => {
@@ -429,7 +429,7 @@ impl Emitter {
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
                 if name == "print" {
-                    self.emit_print_format(&arguments[0], &arguments[0].type_kind)?;
+                    return self.emit_print_format(&arguments[0], &arguments[0].type_kind);
                 } else {
                     write!(self.output, "{}(", name)?;
                 }
@@ -538,33 +538,38 @@ impl Emitter {
                 write!(self.output, "\tprintf(\"%s\\n\", ")?;
                 self.emit_expr(argument)?;
                 write!(self.output, " ? \"true\" : \"false\")")?;
-                Ok(())
             }
-            TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", "),
-            TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", "),
-            TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", "),
+            TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", ")?,
+            TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
+            TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
             TypeKind::Array { .. } => panic!("cannot print array"),
             TypeKind::Slice { element_type } => {
                 if **element_type == TypeKind::Char {
+                    if let CheckedExpressionKind::StringLiteral(value) = &argument.kind {
+                        return writeln!(self.output, "\tprintf(\"%s\\n\", \"{}\")", value);
+                    }
+
                     write!(self.output, "\tprintf(\"%.*s\\n\", ",)?;
                     self.emit_expr(argument)?;
                     write!(self.output, ".len, ")?;
                     self.emit_expr(argument)?;
                     write!(self.output, ".data)")?;
-                    Ok(())
+                    return Ok(());
                 } else {
                     panic!("cannot print slice")
                 }
             }
             TypeKind::Pointer { reference_type } => {
                 if TypeKind::Char == **reference_type {
-                    write!(self.output, "\tprintf(\"%s\\n\", ")
+                    write!(self.output, "\tprintf(\"%s\\n\", ")?
                 } else {
-                    write!(self.output, "\tprintf(\"%zu\\n\", ")
+                    write!(self.output, "\tprintf(\"%zu\\n\", ")?
                 }
             }
-            TypeKind::Enum { tag, .. } => self.emit_print_format(argument, tag),
+            TypeKind::Enum { tag, .. } => self.emit_print_format(argument, tag)?,
         }
+        self.emit_expr(argument)?;
+        write!(self.output, ")")
     }
 
     fn emit_preamble(&mut self) -> Result<(), Error> {

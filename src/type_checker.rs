@@ -290,14 +290,58 @@ struct Scope {
 impl Scope {
     fn new(return_context: TypeKind) -> Scope {
         Scope {
-            identifiers: vec![ScopedIdentifier::Function {
-                return_type: TypeKind::Void,
-                name: "print".to_string(),
-                params: vec![FunctionParam {
-                    type_kind: TypeKind::Any,
-                    mutable: false,
-                }], //TODO: varargs
-            }],
+            identifiers: vec![
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Void,
+                    name: "print".to_string(),
+                    params: vec![FunctionParam {
+                        type_kind: TypeKind::Any,
+                        mutable: false,
+                    }], //TODO: varargs
+                },
+                ScopedIdentifier::Type {
+                    type_kind: TypeKind::Struct {
+                        name: "FILE".to_string(),
+                        fields: vec![],
+                    },
+                },
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Pointer {
+                        reference_type: Box::new(TypeKind::Struct {
+                            name: "FILE".to_string(),
+                            fields: vec![],
+                        }),
+                    },
+                    name: "fopen".to_string(),
+                    params: vec![
+                        FunctionParam {
+                            type_kind: TypeKind::Pointer {
+                                reference_type: Box::new(TypeKind::Char),
+                            },
+                            mutable: false,
+                        },
+                        FunctionParam {
+                            type_kind: TypeKind::Pointer {
+                                reference_type: Box::new(TypeKind::Char),
+                            },
+                            mutable: false,
+                        },
+                    ],
+                },
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Void,
+                    name: "fclose".to_string(),
+                    params: vec![FunctionParam {
+                        type_kind: TypeKind::Pointer {
+                            reference_type: Box::new(TypeKind::Struct {
+                                name: "FILE".to_string(),
+                                fields: vec![],
+                            }),
+                        },
+                        mutable: false,
+                    }],
+                },
+            ],
             return_context,
         }
     }
@@ -731,10 +775,12 @@ impl<'src> TypeChecker<'src> {
                 }
 
                 match &checked_expression.type_kind.clone() {
-                    TypeKind::Option { .. } | TypeKind::Bool => Ok(CheckedStatement::Guard {
-                        expression: checked_expression,
-                        body: Box::new(checked_body),
-                    }),
+                    TypeKind::Option { .. } | TypeKind::Bool | TypeKind::Pointer { .. } => {
+                        Ok(CheckedStatement::Guard {
+                            expression: checked_expression,
+                            body: Box::new(checked_body),
+                        })
+                    }
                     _ => Err(Diagnostic::new(
                         format!(
                             "cannot guard against type `{}`",
@@ -1391,36 +1437,37 @@ impl<'src> TypeChecker<'src> {
                 let expression_span = expr.span;
                 let checked_expression = self.check_expr(*expression)?;
 
-                if let TypeKind::Option { reference_type } = &checked_expression.type_kind {
-                    match self.get_return_context() {
-                        TypeKind::Void => {
-                            //gucci
+                match &checked_expression.type_kind {
+                    TypeKind::Option { reference_type } | TypeKind::Pointer { reference_type } => {
+                        match self.get_return_context() {
+                            TypeKind::Void => {
+                                //gucci
+                            }
+                            TypeKind::Option { reference_type: inner } => {
+                                Self::expect_type(reference_type, &inner, expression_span)?;
+                            }
+                            _ => {
+                                return Err(Diagnostic::new(
+                                    format!("cannot unwrap optional type `{}` in non-void or non-optional return context `{}`", checked_expression.type_kind, self.get_return_context()),
+                                    expression_span,
+                                ))
+                            }
                         }
-                        TypeKind::Option { reference_type: inner } => {
-                            Self::expect_type(reference_type, &inner, expression_span)?;
-                        }
-                        _ => {
-                            return Err(Diagnostic::new(
-                                format!("cannot unwrap optional type `{}` in non-void or non-optional return context `{}`", checked_expression.type_kind, self.get_return_context()),
-                                expression_span,
-                            ))
-                        }
-                    }
 
-                    Ok(CheckedExpression {
-                        type_kind: *reference_type.clone(),
-                        kind: CheckedExpressionKind::OptionUnwrap {
-                            expression: Box::new(checked_expression),
-                        },
-                    })
-                } else {
-                    Err(Diagnostic::new(
+                        Ok(CheckedExpression {
+                            type_kind: *reference_type.clone(),
+                            kind: CheckedExpressionKind::OptionUnwrap {
+                                expression: Box::new(checked_expression),
+                            },
+                        })
+                    }
+                    _ => Err(Diagnostic::new(
                         format!(
                             "cannot unwrap non-optional type `{}`",
                             checked_expression.type_kind
                         ),
                         expression_span,
-                    ))
+                    )),
                 }
             }
             ExpressionKind::Guard { expression, body } => {
@@ -1438,6 +1485,13 @@ impl<'src> TypeChecker<'src> {
 
                 match &checked_expression.type_kind.clone() {
                     TypeKind::Option { reference_type } => Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::Guard {
+                            expression: Box::new(checked_expression),
+                            body: Box::new(checked_body),
+                        },
+                        type_kind: *reference_type.clone(),
+                    }),
+                    TypeKind::Pointer { reference_type } => Ok(CheckedExpression {
                         kind: CheckedExpressionKind::Guard {
                             expression: Box::new(checked_expression),
                             body: Box::new(checked_body),
