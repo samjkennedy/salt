@@ -719,14 +719,14 @@ impl<'src> TypeChecker<'src> {
 
         let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
         let mut params: Vec<FunctionParam> = Vec::new();
-        for parameter in parameters {
+        for parameter in &parameters {
             if let StatementKind::Parameter {
                 name_token,
                 mut_keyword,
                 type_expression,
-            } = parameter.kind
+            } = &parameter.kind
             {
-                let type_kind = self.bind_type_kind(type_expression)?;
+                let type_kind = self.bind_type_kind(type_expression.clone())?;
                 self.try_declare_identifier(
                     ScopedIdentifier::Variable {
                         name: name_token.text.clone(),
@@ -738,7 +738,7 @@ impl<'src> TypeChecker<'src> {
 
                 checked_parameters.push(CheckedStatement::Parameter {
                     type_kind: type_kind.clone(),
-                    name: name_token.text,
+                    name: name_token.text.clone(),
                 });
                 params.push(FunctionParam {
                     type_kind,
@@ -761,6 +761,49 @@ impl<'src> TypeChecker<'src> {
         //         },
         //         return_type_span,
         //     )?;
+
+        if name == "main" {
+            if params.is_empty() {
+                //good
+            } else if params.len() == 1 {
+                //TODO: better error than the generic type mismatch
+                if Self::expect_type(
+                    &TypeKind::Slice {
+                        element_type: Box::new(TypeKind::Slice {
+                            element_type: Box::new(TypeKind::Char),
+                        }),
+                    },
+                    &params[0].type_kind,
+                    parameters[0].span,
+                )
+                .is_err()
+                {
+                    return Err(Diagnostic::with_hint(
+                        "invalid parameters for main function".to_string(),
+                        "accepted parameters are [(), ([]String)]".to_string(),
+                        parameters[0].span,
+                    ));
+                }
+            } else {
+                return Err(Diagnostic::with_hint(
+                    "invalid parameters for main function".to_string(),
+                    "accepted parameters are [(), ([]String)]".to_string(),
+                    Span::from_to(parameters[0].span, parameters.last().unwrap().span),
+                ));
+            }
+
+            //TODO: allow !void returns
+            if Self::expect_type(&TypeKind::Void, &return_type_kind, return_type_span).is_err() {
+                return Err(Diagnostic::with_hint(
+                    format!(
+                        "invalid return type `{}` for main function",
+                        return_type_kind
+                    ),
+                    "accepted return types are [void, !void]".to_string(),
+                    return_type_span,
+                ));
+            }
+        }
 
         self.scope.push(Scope::new(return_type_kind.clone()));
         let checked_body = self.check_statement(*body, false)?;
@@ -1688,9 +1731,11 @@ impl<'src> TypeChecker<'src> {
             }
             TypeExpression::Slice(_, element_type) => {
                 let element_type = self.bind_type_kind(*element_type)?;
-                Ok(TypeKind::Slice {
+                let slice_type = TypeKind::Slice {
                     element_type: Box::new(element_type),
-                })
+                };
+                self.module.add_type(&slice_type);
+                Ok(slice_type)
             }
 
             TypeExpression::Pointer(_, reference_type) => {

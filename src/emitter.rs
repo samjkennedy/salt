@@ -26,7 +26,9 @@ impl Emitter {
                     self.emit_type(&element_type)?;
                     writeln!(self.output, " *data;")?;
                     writeln!(self.output, "\tlong len;")?;
-                    writeln!(self.output, "}} Slice_{};", element_type)?;
+                    write!(self.output, "}} Slice_")?;
+                    self.emit_type(&element_type)?;
+                    writeln!(self.output, ";")?;
                 }
                 TypeKind::Option { reference_type } => {
                     writeln!(self.output, "typedef struct {{")?;
@@ -34,7 +36,9 @@ impl Emitter {
                     self.emit_type(&reference_type)?;
                     writeln!(self.output, " value;")?;
                     writeln!(self.output, "\tbool has_value;")?;
-                    writeln!(self.output, "}} Option_{};", reference_type)?;
+                    write!(self.output, "}} Option_")?;
+                    self.emit_type(&reference_type)?;
+                    writeln!(self.output, ";")?;
                 }
                 TypeKind::Struct { name, fields } => {
                     writeln!(self.output, "typedef struct {{")?;
@@ -78,31 +82,35 @@ impl Emitter {
                 parameters,
                 body,
             } => {
-                self.emit_type(return_type)?;
-                write!(self.output, " {}(", name)?;
-
-                for (i, parameter) in parameters.iter().enumerate() {
-                    if let CheckedStatement::Parameter { type_kind, name } = parameter {
-                        self.emit_var_decl_type(type_kind, name)?;
-                    } else {
-                        unreachable!()
-                    }
-                    if i < parameters.len() - 1 {
-                        write!(self.output, ", ")?;
-                    }
+                if name == "main" && parameters.len() == 1 {
+                    //We've verified it's a []String at the typechecking stage
+                    //emit the main as a salt_main
+                    self.emit_function_definition(
+                        return_type,
+                        &"salt_main".to_string(),
+                        parameters,
+                        body,
+                    )?;
+                    //emit a cmain that constructs the slice and calls salt_main
+                    writeln!(self.output, "int main(int argc, char **argv) {{")?;
+                    writeln!(self.output, "Slice_Slice_char args;")?;
+                    writeln!(self.output, "args.len = argc;")?;
+                    writeln!(
+                        self.output,
+                        "args.data = malloc(sizeof(Slice_char) * argc);"
+                    )?;
+                    writeln!(self.output, "for (int i = 0; i < argc; ++i) {{")?;
+                    writeln!(self.output, "args.data[i].data = argv[i];")?;
+                    writeln!(self.output, "args.data[i].len = strlen(argv[i]);")?;
+                    writeln!(self.output, "}}")?;
+                    writeln!(self.output, "salt_main(args);")?;
+                    writeln!(self.output, "free(args.data);")?;
+                    writeln!(self.output, "return 0;")?;
+                    writeln!(self.output, "}}")?;
+                    return Ok(());
                 }
-                write!(self.output, ")")?;
 
-                match **body {
-                    CheckedStatement::Expression(_) => {
-                        //C does not allow single statement bodies, they must be blocks
-                        write!(self.output, "{{\n\t")?;
-                        self.emit_statement(body)?;
-                        writeln!(self.output, "}}")
-                    }
-                    CheckedStatement::FunctionDefinition { .. } => unreachable!(),
-                    _ => self.emit_statement(body),
-                }
+                self.emit_function_definition(return_type, name, parameters, body)
             }
             CheckedStatement::VariableDeclaration {
                 type_kind,
@@ -235,6 +243,40 @@ impl Emitter {
         }
     }
 
+    fn emit_function_definition(
+        &mut self,
+        return_type: &TypeKind,
+        name: &String,
+        parameters: &[CheckedStatement],
+        body: &CheckedStatement,
+    ) -> Result<(), Error> {
+        self.emit_type(return_type)?;
+        write!(self.output, " {}(", name)?;
+
+        for (i, parameter) in parameters.iter().enumerate() {
+            if let CheckedStatement::Parameter { type_kind, name } = parameter {
+                self.emit_var_decl_type(type_kind, name)?;
+            } else {
+                unreachable!()
+            }
+            if i < parameters.len() - 1 {
+                write!(self.output, ", ")?;
+            }
+        }
+        write!(self.output, ")")?;
+
+        match body {
+            CheckedStatement::Expression(_) => {
+                //C does not allow single statement bodies, they must be blocks
+                write!(self.output, "{{\n\t")?;
+                self.emit_statement(body)?;
+                writeln!(self.output, "}}")
+            }
+            CheckedStatement::FunctionDefinition { .. } => unreachable!(),
+            _ => self.emit_statement(body),
+        }
+    }
+
     fn emit_type(&mut self, type_kind: &TypeKind) -> Result<(), Error> {
         match type_kind {
             TypeKind::Any => unreachable!(),
@@ -289,10 +331,14 @@ impl Emitter {
                 name: struct_name, ..
             } => write!(self.output, "{} {}", struct_name, name)?,
             TypeKind::Slice { element_type } => {
-                write!(self.output, "Slice_{} {}", element_type, name)?;
+                write!(self.output, "Slice_")?;
+                self.emit_type(element_type)?;
+                write!(self.output, " {}", name)?
             }
             TypeKind::Option { reference_type } => {
-                write!(self.output, "Option_{} {}", reference_type, name)?;
+                write!(self.output, "Slice_")?;
+                self.emit_type(reference_type)?;
+                write!(self.output, " {}", name)?
             }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
         }
@@ -391,6 +437,9 @@ impl Emitter {
                                 write!(self.output, "\tprintf(\"%.*s\\n\", ",)?;
                                 self.emit_expr(&arguments[0])?;
                                 write!(self.output, ".len, ")?;
+                                self.emit_expr(&arguments[0])?;
+                                write!(self.output, ".data)")?;
+                                return Ok(());
                             } else {
                                 panic!("cannot print slice")
                             }
@@ -499,6 +548,8 @@ impl Emitter {
     fn emit_preamble(&mut self) -> Result<(), Error> {
         writeln!(self.output, "#include <stdbool.h>")?;
         writeln!(self.output, "#include <stdio.h>")?;
+        writeln!(self.output, "#include <string.h>")?;
+        writeln!(self.output, "#include <stdlib.h>")?;
         Ok(())
     }
 }
