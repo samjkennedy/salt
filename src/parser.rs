@@ -81,6 +81,7 @@ pub enum UnaryOp {
 pub enum ExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
+    StringLiteral(String),
     Variable(Token),
     Parenthesized(Box<Expression>),
     ArrayLiteral(Vec<Expression>),
@@ -162,6 +163,7 @@ impl Expression {
         match &self.kind {
             ExpressionKind::BoolLiteral(_) => false,
             ExpressionKind::IntLiteral(_) => false,
+            ExpressionKind::StringLiteral(_) => false,
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
             ExpressionKind::ArrayLiteral(_) => false,
@@ -661,6 +663,13 @@ impl<'src> Parser<'src> {
                 self.next()?;
                 Ok(Expression {
                     kind: ExpressionKind::IntLiteral(value),
+                    span: token.span,
+                })
+            }
+            TokenKind::StringLiteral(value) => {
+                self.next()?;
+                Ok(Expression {
+                    kind: ExpressionKind::StringLiteral(value),
                     span: token.span,
                 })
             }

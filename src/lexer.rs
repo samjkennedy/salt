@@ -4,6 +4,7 @@ use crate::diagnostic::Diagnostic;
 pub enum TokenKind {
     IntLiteral(i64),
     Identifier(String),
+    StringLiteral(String),
     Plus,
     Minus,
     Star,
@@ -107,6 +108,7 @@ impl<'src> Lexer<'src> {
                         Ok(self.make_token(TokenKind::Dot, ".".to_owned()))
                     }
                 }
+                '"' => Ok(self.lex_string_literal()),
                 '0'..='9' => Ok(self.lex_number()),
                 x if x.is_alphabetic() => Ok(self.lex_identifier_or_keyword()),
                 _ => {
@@ -190,6 +192,32 @@ impl<'src> Lexer<'src> {
                 length: number.len(),
             },
             text: number.to_owned(),
+        }
+    }
+
+    fn lex_string_literal(&mut self) -> Token {
+        let start = self.cursor;
+
+        self.advance(); //skip opening "
+        while let Some(c) = self.peek() {
+            if c != '"' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.advance(); //skip closing "
+        let value = &self.input[start..self.cursor];
+        let span = Span {
+            start,
+            length: value.len(),
+        };
+
+        Token {
+            kind: TokenKind::StringLiteral(value.to_string()[1..value.len() - 1].trim().to_owned()), //Slice out the quotes
+            span,
+            text: value.to_owned(),
         }
     }
 
