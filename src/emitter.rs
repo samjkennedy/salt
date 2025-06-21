@@ -236,6 +236,12 @@ impl Emitter {
                 }
                 writeln!(self.output, "}} {};", name)
             }
+            CheckedStatement::Enum { name, variants } => {
+                for (i, variant) in variants.iter().enumerate() {
+                    writeln!(self.output, "const long {}_{} = {};", name, variant, i)?;
+                }
+                Ok(())
+            }
             CheckedStatement::Continue => writeln!(self.output, "continue;"),
             CheckedStatement::Break => writeln!(self.output, "break;"),
             CheckedStatement::For { .. } => unreachable!("should have been rewritten"),
@@ -306,6 +312,7 @@ impl Emitter {
                 self.emit_type(element_type)?;
             }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
+            TypeKind::Enum { .. } => todo!(),
         }
         Ok(())
     }
@@ -341,6 +348,9 @@ impl Emitter {
                 write!(self.output, " {}", name)?
             }
             TypeKind::Range => unreachable!("this shouldn't be emitted"),
+            TypeKind::Enum { tag, .. } => {
+                self.emit_var_decl_type(tag, name)?;
+            }
         }
         Ok(())
     }
@@ -416,42 +426,7 @@ impl Emitter {
             }
             CheckedExpressionKind::FunctionCall { name, arguments } => {
                 if name == "print" {
-                    match &arguments[0].type_kind {
-                        TypeKind::Any => unreachable!(),
-                        TypeKind::Void => panic!("cannot print void"),
-                        TypeKind::Struct { .. } => panic!("cannot print structs"),
-                        TypeKind::Option { .. } => panic!("cannot print options"),
-                        TypeKind::Range => panic!("cannot print ranges"),
-                        TypeKind::Bool => {
-                            write!(self.output, "\tprintf(\"%s\\n\", ")?;
-                            self.emit_expr(&arguments[0])?;
-                            write!(self.output, " ? \"true\" : \"false\")")?;
-                            return Ok(());
-                        }
-                        TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", ")?,
-                        TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
-                        TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
-                        TypeKind::Array { .. } => panic!("cannot print array"),
-                        TypeKind::Slice { element_type } => {
-                            if **element_type == TypeKind::Char {
-                                write!(self.output, "\tprintf(\"%.*s\\n\", ",)?;
-                                self.emit_expr(&arguments[0])?;
-                                write!(self.output, ".len, ")?;
-                                self.emit_expr(&arguments[0])?;
-                                write!(self.output, ".data)")?;
-                                return Ok(());
-                            } else {
-                                panic!("cannot print slice")
-                            }
-                        }
-                        TypeKind::Pointer { reference_type } => {
-                            if TypeKind::Char == **reference_type {
-                                write!(self.output, "\tprintf(\"%s\\n\", ")?
-                            } else {
-                                write!(self.output, "\tprintf(\"%zu\\n\", ")?
-                            }
-                        }
-                    }
+                    self.emit_print_format(&arguments[0], &arguments[0].type_kind)?;
                 } else {
                     write!(self.output, "{}(", name)?;
                 }
@@ -542,6 +517,50 @@ impl Emitter {
             CheckedExpressionKind::OptionUnwrap { .. } | CheckedExpressionKind::Guard { .. } => {
                 unreachable!("should have been removed in the rewriting step")
             }
+        }
+    }
+
+    fn emit_print_format(
+        &mut self,
+        argument: &CheckedExpression,
+        arg_type: &TypeKind,
+    ) -> Result<(), Error> {
+        match arg_type {
+            TypeKind::Any => unreachable!(),
+            TypeKind::Void => panic!("cannot print void"),
+            TypeKind::Struct { .. } => panic!("cannot print structs"),
+            TypeKind::Option { .. } => panic!("cannot print options"),
+            TypeKind::Range => panic!("cannot print ranges"),
+            TypeKind::Bool => {
+                write!(self.output, "\tprintf(\"%s\\n\", ")?;
+                self.emit_expr(argument)?;
+                write!(self.output, " ? \"true\" : \"false\")")?;
+                Ok(())
+            }
+            TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", "),
+            TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", "),
+            TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", "),
+            TypeKind::Array { .. } => panic!("cannot print array"),
+            TypeKind::Slice { element_type } => {
+                if **element_type == TypeKind::Char {
+                    write!(self.output, "\tprintf(\"%.*s\\n\", ",)?;
+                    self.emit_expr(argument)?;
+                    write!(self.output, ".len, ")?;
+                    self.emit_expr(argument)?;
+                    write!(self.output, ".data)")?;
+                    Ok(())
+                } else {
+                    panic!("cannot print slice")
+                }
+            }
+            TypeKind::Pointer { reference_type } => {
+                if TypeKind::Char == **reference_type {
+                    write!(self.output, "\tprintf(\"%s\\n\", ")
+                } else {
+                    write!(self.output, "\tprintf(\"%zu\\n\", ")
+                }
+            }
+            TypeKind::Enum { tag, .. } => self.emit_print_format(argument, tag),
         }
     }
 

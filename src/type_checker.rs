@@ -49,6 +49,10 @@ pub enum CheckedStatement {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+    },
     Continue,
     Break,
 }
@@ -79,6 +83,11 @@ pub enum TypeKind {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+        tag: Box<TypeKind>,
+    },
     Range,
 }
 
@@ -103,7 +112,7 @@ impl Display for TypeKind {
             TypeKind::Option { reference_type } => {
                 write!(f, "?{}", reference_type)
             }
-            TypeKind::Struct { name, .. } => write!(f, "{}", name),
+            TypeKind::Struct { name, .. } | TypeKind::Enum { name, .. } => write!(f, "{}", name),
             TypeKind::Range => write!(f, "range"),
         }
     }
@@ -489,6 +498,38 @@ impl<'src> TypeChecker<'src> {
                     fields: checked_fields,
                 })
             }
+            StatementKind::Enum {
+                identifier,
+                variants,
+            } => {
+                let mut variant_names = Vec::new();
+
+                for variant in variants {
+                    if variant_names.contains(&variant.text) {
+                        return Err(Diagnostic::new(
+                            format!("duplicate enum variant `{}`", variant.text),
+                            variant.span,
+                        ));
+                    }
+                    variant_names.push(variant.text);
+                }
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Type {
+                        type_kind: TypeKind::Enum {
+                            name: identifier.text.clone(),
+                            variants: variant_names.clone(),
+                            tag: Box::new(TypeKind::I64),
+                        },
+                    },
+                    identifier.span,
+                )?;
+
+                Ok(CheckedStatement::Enum {
+                    name: identifier.text,
+                    variants: variant_names,
+                })
+            }
             StatementKind::VariableDeclaration {
                 identifier,
                 type_expression,
@@ -849,7 +890,9 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_return(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
+            CheckedStatement::FunctionDefinition { .. }
+            | CheckedStatement::Struct { .. }
+            | CheckedStatement::Enum { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -883,7 +926,9 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_exit_scope(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
+            CheckedStatement::FunctionDefinition { .. }
+            | CheckedStatement::Struct { .. }
+            | CheckedStatement::Enum { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -1413,6 +1458,63 @@ impl<'src> TypeChecker<'src> {
                     )),
                 }
             }
+            ExpressionKind::StaticAccess { namespace, member } => match namespace.kind {
+                //TODO This could benefit from being recursive
+                ExpressionKind::Variable(token) => match self.get_identifier(&token.text) {
+                    None => Err(Diagnostic::new(
+                        format!("no such namespace `{}` in scope", token.text),
+                        namespace.span,
+                    )),
+                    Some(identifier) => match identifier {
+                        ScopedIdentifier::Variable { .. } | ScopedIdentifier::Function { .. } => {
+                            Err(Diagnostic::new(
+                                "static access is not allowed here".to_string(),
+                                expr.span,
+                            ))
+                        }
+                        ScopedIdentifier::Type { type_kind } => match &type_kind {
+                            TypeKind::Enum { variants, .. } => {
+                                if let ExpressionKind::Variable(member) = member.kind {
+                                    if variants.contains(&member.text) {
+                                        Ok(CheckedExpression {
+                                            kind: CheckedExpressionKind::IntLiteral(
+                                                variants
+                                                    .iter()
+                                                    .position(|x| x == &member.text)
+                                                    .unwrap()
+                                                    as i64, //TODO: use the tag, requires IntLiteral to also take a TypeKind
+                                            ),
+                                            type_kind,
+                                        })
+                                    } else {
+                                        Err(Diagnostic::new(
+                                            format!(
+                                                "no such enum variant `{}` in `{}`",
+                                                member.text, type_kind
+                                            ),
+                                            member.span,
+                                        ))
+                                    }
+                                } else {
+                                    Err(Diagnostic::new(
+                                        "member must be an identifier".to_string(),
+                                        member.span,
+                                    ))
+                                }
+                            }
+                            _ => Err(Diagnostic::new(
+                                format!("static access is not allowed on type `{}`", type_kind),
+                                expr.span,
+                            )),
+                        },
+                    },
+                },
+                ExpressionKind::StaticAccess { .. } => todo!("nested static access"),
+                _ => Err(Diagnostic::new(
+                    "static access is not allowed here".to_string(),
+                    expr.span,
+                )),
+            },
         }
     }
 

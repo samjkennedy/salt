@@ -46,6 +46,10 @@ pub enum StatementKind {
         identifier: Token,
         fields: Vec<Statement>,
     },
+    Enum {
+        identifier: Token,
+        variants: Vec<Token>,
+    },
     //TODO labels
     Continue,
     Break,
@@ -109,6 +113,10 @@ pub enum ExpressionKind {
     MemberAccess {
         expression: Box<Expression>,
         member: Token,
+    },
+    StaticAccess {
+        namespace: Box<Expression>,
+        member: Box<Expression>,
     },
     Range {
         lower: Box<Expression>,
@@ -180,6 +188,7 @@ impl Expression {
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
             ExpressionKind::MemberAccess { .. } => true,
+            ExpressionKind::StaticAccess { .. } => false,
             ExpressionKind::Range { .. } => false,
             ExpressionKind::OptionUnwrap { .. } => false, //TODO can you assign to optional unwrap?
             ExpressionKind::Guard { .. } => false,
@@ -243,6 +252,30 @@ impl<'src> Parser<'src> {
                 Ok(Statement {
                     span: Span::from_to(struct_keyword.span, close_curly.span),
                     kind: StatementKind::Struct { identifier, fields },
+                })
+            }
+            TokenKind::EnumKeyword => {
+                let enum_keyword = self.expect(&TokenKind::EnumKeyword)?;
+                let identifier = self.expect_identifier()?;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut variants = Vec::new();
+                while self.peek().kind != TokenKind::CloseCurly {
+                    let variant = self.expect_identifier()?;
+                    variants.push(variant);
+
+                    if self.peek().kind != TokenKind::CloseCurly {
+                        self.expect(&TokenKind::Comma)?;
+                    }
+                }
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Statement {
+                    span: Span::from_to(enum_keyword.span, close_curly.span),
+                    kind: StatementKind::Enum {
+                        identifier,
+                        variants,
+                    },
                 })
             }
             TokenKind::Identifier(_) if self.context == ParseContext::Global => {
@@ -738,7 +771,6 @@ impl<'src> Parser<'src> {
 
         loop {
             primary = match self.peek().kind {
-                //TODO: these two need to be applied after every expression recursively
                 TokenKind::OpenSquare => self.parse_array_index(primary)?,
                 TokenKind::Dot => {
                     self.expect(&TokenKind::Dot)?;
@@ -761,6 +793,18 @@ impl<'src> Parser<'src> {
                         kind: ExpressionKind::Range {
                             lower: Box::new(primary),
                             upper: Box::new(upper),
+                        },
+                    }
+                }
+                TokenKind::ColonColon => {
+                    self.expect(&TokenKind::ColonColon)?;
+                    let member = self.parse_expression()?;
+
+                    Expression {
+                        span: Span::from_to(primary.span, member.span),
+                        kind: ExpressionKind::StaticAccess {
+                            namespace: Box::new(primary),
+                            member: Box::new(member),
                         },
                     }
                 }

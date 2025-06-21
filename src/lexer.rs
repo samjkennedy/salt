@@ -21,6 +21,7 @@ pub enum TokenKind {
     OpenSquare,
     CloseSquare,
     Colon,
+    ColonColon,
     Semicolon,
     Comma,
     Question,
@@ -39,6 +40,7 @@ pub enum TokenKind {
     ForKeyword,
     InKeyword,
     GuardKeyword,
+    EnumKeyword,
     EndOfFile,
 }
 
@@ -95,7 +97,16 @@ impl<'src> Lexer<'src> {
                 '[' => Ok(self.make_token(TokenKind::OpenSquare, "[".to_owned())),
                 ']' => Ok(self.make_token(TokenKind::CloseSquare, "]".to_owned())),
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
-                ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
+                ':' => {
+                    self.cursor += 1;
+                    if let Some(':') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::ColonColon, "::".to_owned()))
+                    } else {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::Colon, ":".to_owned()))
+                    }
+                }
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
                 '?' => Ok(self.make_token(TokenKind::Question, ",".to_owned())),
                 '.' => {
@@ -301,6 +312,11 @@ impl<'src> Lexer<'src> {
             },
             "guard" => Token {
                 kind: TokenKind::GuardKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "enum" => Token {
+                kind: TokenKind::EnumKeyword,
                 span,
                 text: value.to_owned(),
             },
