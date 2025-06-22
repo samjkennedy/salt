@@ -235,6 +235,7 @@ impl Rewriter {
             CheckedStatement::Parameter { .. } => vec![statement],
             CheckedStatement::Struct { .. } => vec![], //Currently handled by the module, TODO: review that
             CheckedStatement::Enum { .. } => vec![statement],
+            CheckedStatement::ExternFunction { .. } => vec![statement],
             CheckedStatement::Continue => vec![statement],
             CheckedStatement::Break => vec![statement],
             CheckedStatement::For {

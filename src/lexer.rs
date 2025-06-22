@@ -42,6 +42,7 @@ pub enum TokenKind {
     InKeyword,
     GuardKeyword,
     EnumKeyword,
+    ExternKeyword,
     EndOfFile,
 }
 
@@ -327,6 +328,11 @@ impl<'src> Lexer<'src> {
             },
             "enum" => Token {
                 kind: TokenKind::EnumKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "extern" => Token {
+                kind: TokenKind::ExternKeyword,
                 span,
                 text: value.to_owned(),
             },

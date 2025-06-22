@@ -50,6 +50,11 @@ pub enum StatementKind {
         identifier: Token,
         variants: Vec<Token>,
     },
+    ExternFunction {
+        identifier: Token,
+        parameters: Vec<TypeExpression>,
+        return_type: TypeExpression,
+    },
     //TODO labels
     Continue,
     Break,
@@ -276,6 +281,34 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Enum {
                         identifier,
                         variants,
+                    },
+                })
+            }
+            TokenKind::ExternKeyword => {
+                let extern_keyword = self.expect(&TokenKind::ExternKeyword)?;
+                let identifier = self.expect_identifier()?;
+                self.expect(&TokenKind::OpenParen)?;
+
+                let mut parameters = Vec::new();
+                while self.peek().kind != TokenKind::CloseParen {
+                    parameters.push(self.parse_type_expression()?);
+
+                    if self.peek().kind != TokenKind::CloseParen {
+                        self.expect(&TokenKind::Comma)?;
+                    }
+                }
+                self.expect(&TokenKind::CloseParen)?;
+                self.expect(&TokenKind::Colon)?;
+
+                let return_type = self.parse_type_expression()?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(extern_keyword.span, semicolon.span),
+                    kind: StatementKind::ExternFunction {
+                        identifier,
+                        parameters,
+                        return_type,
                     },
                 })
             }

@@ -53,6 +53,11 @@ pub enum CheckedStatement {
         name: String,
         variants: Vec<String>,
     },
+    ExternFunction {
+        name: String,
+        parameters: Vec<FunctionParam>,
+        return_type: TypeKind,
+    },
     Continue,
     Break,
 }
@@ -260,7 +265,7 @@ pub enum CheckedExpressionKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-struct FunctionParam {
+pub struct FunctionParam {
     type_kind: TypeKind,
     mutable: bool,
 }
@@ -273,9 +278,9 @@ enum ScopedIdentifier {
         mutable: bool,
     },
     Function {
-        return_type: TypeKind,
         name: String,
         params: Vec<FunctionParam>,
+        return_type: TypeKind,
     },
     Type {
         type_kind: TypeKind,
@@ -299,47 +304,19 @@ impl Scope {
                         mutable: false,
                     }], //TODO: varargs
                 },
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Void,
+                    name: "println".to_string(),
+                    params: vec![FunctionParam {
+                        type_kind: TypeKind::Any,
+                        mutable: false,
+                    }], //TODO: varargs
+                },
                 ScopedIdentifier::Type {
                     type_kind: TypeKind::Struct {
                         name: "FILE".to_string(),
                         fields: vec![],
                     },
-                },
-                ScopedIdentifier::Function {
-                    return_type: TypeKind::Pointer {
-                        reference_type: Box::new(TypeKind::Struct {
-                            name: "FILE".to_string(),
-                            fields: vec![],
-                        }),
-                    },
-                    name: "fopen".to_string(),
-                    params: vec![
-                        FunctionParam {
-                            type_kind: TypeKind::Pointer {
-                                reference_type: Box::new(TypeKind::Char),
-                            },
-                            mutable: false,
-                        },
-                        FunctionParam {
-                            type_kind: TypeKind::Pointer {
-                                reference_type: Box::new(TypeKind::Char),
-                            },
-                            mutable: false,
-                        },
-                    ],
-                },
-                ScopedIdentifier::Function {
-                    return_type: TypeKind::Void,
-                    name: "fclose".to_string(),
-                    params: vec![FunctionParam {
-                        type_kind: TypeKind::Pointer {
-                            reference_type: Box::new(TypeKind::Struct {
-                                name: "FILE".to_string(),
-                                fields: vec![],
-                            }),
-                        },
-                        mutable: false,
-                    }],
                 },
             ],
             return_context,
@@ -790,6 +767,35 @@ impl<'src> TypeChecker<'src> {
                     )),
                 }
             }
+            StatementKind::ExternFunction {
+                identifier,
+                parameters,
+                return_type,
+            } => {
+                let mut checked_parameters = Vec::new();
+                for parameter in parameters {
+                    checked_parameters.push(FunctionParam {
+                        type_kind: self.bind_type_kind(parameter)?,
+                        mutable: false,
+                    });
+                }
+                let checked_return_type = self.bind_type_kind(return_type)?;
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Function {
+                        name: identifier.text.clone(),
+                        params: checked_parameters.clone(),
+                        return_type: checked_return_type.clone(),
+                    },
+                    statement.span,
+                )?;
+
+                Ok(CheckedStatement::ExternFunction {
+                    name: identifier.text,
+                    parameters: checked_parameters,
+                    return_type: checked_return_type,
+                })
+            }
         }
     }
 
@@ -940,7 +946,8 @@ impl<'src> TypeChecker<'src> {
             }
             CheckedStatement::FunctionDefinition { .. }
             | CheckedStatement::Struct { .. }
-            | CheckedStatement::Enum { .. } => false,
+            | CheckedStatement::Enum { .. }
+            | CheckedStatement::ExternFunction { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -976,7 +983,8 @@ impl<'src> TypeChecker<'src> {
             }
             CheckedStatement::FunctionDefinition { .. }
             | CheckedStatement::Struct { .. }
-            | CheckedStatement::Enum { .. } => false,
+            | CheckedStatement::Enum { .. }
+            | CheckedStatement::ExternFunction { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -1440,11 +1448,8 @@ impl<'src> TypeChecker<'src> {
                 match &checked_expression.type_kind {
                     TypeKind::Option { reference_type } | TypeKind::Pointer { reference_type } => {
                         match self.get_return_context() {
-                            TypeKind::Void => {
-                                //gucci
-                            }
-                            TypeKind::Option { reference_type: inner } => {
-                                Self::expect_type(reference_type, &inner, expression_span)?;
+                            TypeKind::Void | TypeKind::Option { .. } => {
+                                //All good
                             }
                             _ => {
                                 return Err(Diagnostic::new(
@@ -1863,6 +1868,7 @@ impl<'src> TypeChecker<'src> {
             TypeExpression::Simple(token) => match token.text.as_str() {
                 "void" => Ok(TypeKind::Void),
                 "bool" => Ok(TypeKind::Bool),
+                "char" => Ok(TypeKind::Char),
                 "i64" => Ok(TypeKind::I64),
                 "f32" => Ok(TypeKind::F32),
                 "String" => {
