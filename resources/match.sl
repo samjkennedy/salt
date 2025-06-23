@@ -20,4 +20,11 @@ main(): void {
     };
 
     println(s);
+
+    x := 10;
+
+    println(match x {
+        5 * 2 => "ten!",
+        else => "not ten!",
+    });
 }

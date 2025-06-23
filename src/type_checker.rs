@@ -1694,32 +1694,40 @@ impl<'src> TypeChecker<'src> {
                     let arm_span = arm.span;
                     let checked_arm = self.check_expr(arm)?;
 
-                    if let CheckedExpressionKind::MatchArm { pattern, .. } = &checked_arm.kind {
+                    if let CheckedExpressionKind::MatchArm { pattern, value } = &checked_arm.kind {
                         Self::expect_type(
                             &checked_expression.type_kind,
                             &pattern.type_kind,
                             arm_span,
                         )?;
+
+                        if result_type.is_none() {
+                            result_type = Some(checked_arm.type_kind.clone());
+                        } else {
+                            Self::expect_type(
+                                &result_type.clone().unwrap(),
+                                &value.type_kind,
+                                arm_span, //TODO: would be nice if this was just the value span
+                            )?;
+                        }
+                        checked_arms.push(checked_arm);
                     } else {
                         unreachable!()
                     }
-
-                    if result_type.is_none() {
-                        result_type = Some(checked_arm.type_kind.clone());
-                    } else {
-                        Self::expect_type(
-                            &result_type.clone().unwrap(),
-                            &checked_arm.type_kind,
-                            arm_span,
-                        )?;
-                    }
-                    checked_arms.push(checked_arm);
                 }
 
                 exhaustive =
                     Self::check_match_exhaustiveness(&checked_expression.type_kind, &checked_arms);
 
                 let checked_default = if let Some(default_value) = default {
+                    if exhaustive {
+                        return Err(Diagnostic::with_hint(
+                            "match expression is exhaustive, else branch is redundant".to_string(),
+                            "consider removing the else branch".to_string(),
+                            default_value.span,
+                        ));
+                    }
+
                     let default_span = default_value.span;
                     let checked_default = self.check_expr(*default_value)?;
                     if result_type.is_none() {
