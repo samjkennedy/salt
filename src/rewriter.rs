@@ -86,7 +86,7 @@ impl Rewriter {
             }
             CheckedStatement::While { condition, body } => {
                 let (mut prep_stmts, rewritten_condition) =
-                    Self::rewrite_expression(&condition, return_context);
+                    self.rewrite_expression(&condition, return_context);
                 let rewritten_body = self.rewrite_statement(*body, return_context);
 
                 prep_stmts.push(CheckedStatement::While {
@@ -102,7 +102,7 @@ impl Rewriter {
                 else_branch,
             } => {
                 let (mut prep_stmts, rewritten_condition) =
-                    Self::rewrite_expression(&condition, return_context);
+                    self.rewrite_expression(&condition, return_context);
                 let rewritten_body = self.rewrite_statement(*body, return_context);
 
                 let rewritten_else_branch = else_branch.map(|else_branch| {
@@ -175,33 +175,31 @@ impl Rewriter {
             CheckedStatement::Return { expression } => {
                 if let Some(expression) = expression {
                     let (mut prep_stmts, rewritten_expression) =
-                        Self::rewrite_expression(&expression, return_context);
+                        self.rewrite_expression(&expression, return_context);
 
                     //TODO: This should get handled by rewrite_expression by passing in an assign context rather than the return context
                     //      Or if instead allow explicit some like `return ?10;`
-                    let return_statement =
-                        if let TypeKind::Option { reference_type } = return_context {
-                            CheckedStatement::Return {
-                                expression: Some(Self::some_optional_expression(
-                                    rewritten_expression,
-                                    return_context,
-                                    reference_type,
-                                )),
-                            }
-                        } else {
-                            CheckedStatement::Return {
-                                expression: Some(rewritten_expression),
-                            }
-                        };
+                    let return_statement = if let TypeKind::Option { .. } = &return_context {
+                        CheckedStatement::Return {
+                            expression: Some(CheckedExpression {
+                                kind: CheckedExpressionKind::Some(Box::new(rewritten_expression)),
+                                type_kind: return_context.clone(),
+                            }),
+                        }
+                    } else {
+                        CheckedStatement::Return {
+                            expression: Some(rewritten_expression),
+                        }
+                    };
                     prep_stmts.push(return_statement);
 
                     prep_stmts
-                } else if let TypeKind::Option { reference_type } = return_context {
+                } else if let TypeKind::Option { reference_type } = &return_context {
                     vec![CheckedStatement::Return {
-                        expression: Some(Self::none_optional_expression(
-                            return_context,
-                            reference_type,
-                        )),
+                        expression: Some(CheckedExpression {
+                            type_kind: return_context.clone(),
+                            kind: CheckedExpressionKind::None(*reference_type.clone()),
+                        }),
                     }]
                 } else {
                     vec![CheckedStatement::Return { expression: None }]
@@ -212,21 +210,29 @@ impl Rewriter {
                 name,
                 initialiser,
             } => {
-                let (mut prep_stmts, rewritten_initialiser) =
-                    Self::rewrite_expression(&initialiser, return_context);
+                if let Some(initialiser) = initialiser {
+                    let (mut prep_stmts, rewritten_initialiser) =
+                        self.rewrite_expression(&initialiser, return_context);
 
-                let declaration = CheckedStatement::VariableDeclaration {
-                    type_kind: type_kind.clone(),
-                    name,
-                    initialiser: rewritten_initialiser,
-                };
+                    let declaration = CheckedStatement::VariableDeclaration {
+                        type_kind: type_kind.clone(),
+                        name,
+                        initialiser: Some(rewritten_initialiser),
+                    };
 
-                prep_stmts.push(declaration);
-                prep_stmts
+                    prep_stmts.push(declaration);
+                    prep_stmts
+                } else {
+                    vec![CheckedStatement::VariableDeclaration {
+                        type_kind: type_kind.clone(),
+                        name,
+                        initialiser: None,
+                    }]
+                }
             }
             CheckedStatement::Expression(expression) => {
                 let (mut prep_stmts, rewritten_expr) =
-                    Self::rewrite_expression(&expression, return_context);
+                    self.rewrite_expression(&expression, return_context);
 
                 prep_stmts.push(CheckedStatement::Expression(rewritten_expr));
 
@@ -234,6 +240,8 @@ impl Rewriter {
             }
             CheckedStatement::Parameter { .. } => vec![statement],
             CheckedStatement::Struct { .. } => vec![], //Currently handled by the module, TODO: review that
+            CheckedStatement::Enum { .. } => vec![statement],
+            CheckedStatement::ExternFunction { .. } => vec![statement],
             CheckedStatement::Continue => vec![statement],
             CheckedStatement::Break => vec![statement],
             CheckedStatement::For {
@@ -264,7 +272,7 @@ impl Rewriter {
                  */
 
                 let (mut prep_stmts, rewritten_iterable) =
-                    Self::rewrite_expression(&iterable, return_context);
+                    self.rewrite_expression(&iterable, return_context);
 
                 match &rewritten_iterable.type_kind {
                     TypeKind::Slice { element_type } | TypeKind::Array { element_type, .. } => {
@@ -272,10 +280,10 @@ impl Rewriter {
                         let it_decl = CheckedStatement::VariableDeclaration {
                             type_kind: TypeKind::I64,
                             name: it_name.clone(),
-                            initialiser: CheckedExpression {
+                            initialiser: Some(CheckedExpression {
                                 kind: CheckedExpressionKind::IntLiteral(0),
                                 type_kind: *element_type.clone(),
-                            },
+                            }),
                         };
 
                         let mut new_body = Vec::new();
@@ -291,13 +299,13 @@ impl Rewriter {
                         let access_decl = CheckedStatement::VariableDeclaration {
                             type_kind: *element_type.clone(),
                             name: iterator_name,
-                            initialiser: CheckedExpression {
+                            initialiser: Some(CheckedExpression {
                                 kind: CheckedExpressionKind::ArrayIndex {
                                     array: Box::new(rewritten_iterable.clone()),
                                     index: Box::new(var_expr.clone()),
                                 },
                                 type_kind: *element_type.clone(),
-                            },
+                            }),
                         };
 
                         let increment = CheckedStatement::Expression(CheckedExpression {
@@ -399,7 +407,7 @@ impl Rewriter {
                         let it_decl = CheckedStatement::VariableDeclaration {
                             type_kind: TypeKind::I64,
                             name: it_name.clone(),
-                            initialiser: *lower,
+                            initialiser: Some(*lower),
                         };
 
                         let mut rewritten_body = Vec::new();
@@ -415,7 +423,7 @@ impl Rewriter {
                         let iterator_decl = CheckedStatement::VariableDeclaration {
                             type_kind: TypeKind::I64,
                             name: iterator_name,
-                            initialiser: var_expr.clone(),
+                            initialiser: Some(var_expr.clone()),
                         };
 
                         let increment = CheckedStatement::Expression(CheckedExpression {
@@ -472,10 +480,56 @@ impl Rewriter {
                     _ => unreachable!(),
                 }
             }
+            // CheckedStatement::MatchArm { .. } => vec![statement],
+            // CheckedStatement::Match { .. } => vec![statement],
+            //TODO: figure this out later...
+            CheckedStatement::MatchArm { pattern, body } => {
+                let mut prep_stmts = Vec::new();
+                let (stmts, rewritten_pattern) = self.rewrite_expression(&pattern, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+                let stmts = self.rewrite_statement(*body, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+
+                vec![CheckedStatement::MatchArm {
+                    pattern: rewritten_pattern,
+                    body: Box::new(CheckedStatement::Block(prep_stmts)),
+                }]
+            }
+            CheckedStatement::Match {
+                expression,
+                arms,
+                default,
+            } => {
+                let mut prep_stmts = Vec::new();
+                let (stmts, rewritten_expression) =
+                    self.rewrite_expression(&expression, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+
+                let mut rewritten_arms = Vec::new();
+                for arm in arms {
+                    let rewritten_arm = self.rewrite_statement(arm, return_context);
+                    rewritten_arms.push(CheckedStatement::Block(rewritten_arm));
+                }
+
+                prep_stmts.push(CheckedStatement::Match {
+                    expression: rewritten_expression,
+                    arms: rewritten_arms,
+                    default,
+                });
+
+                prep_stmts
+            }
         }
     }
 
     fn rewrite_expression(
+        &mut self,
         expr: &CheckedExpression,
         return_context: &TypeKind,
     ) -> (Vec<CheckedStatement>, CheckedExpression) {
@@ -483,55 +537,118 @@ impl Rewriter {
             CheckedExpressionKind::OptionUnwrap { expression } => {
                 let type_kind = expression.type_kind.clone();
 
-                let has_value = CheckedExpression {
-                    kind: CheckedExpressionKind::MemberAccess {
-                        expression: expression.clone(),
-                        member: "has_value".to_string(),
-                    },
-                    type_kind: TypeKind::Bool,
-                };
-                let not_has_value = CheckedExpression {
-                    kind: CheckedExpressionKind::Unary {
-                        operator: CheckedUnaryOp::Not {
-                            result: TypeKind::Bool,
-                        },
-                        operand: Box::new(has_value),
-                    },
-                    type_kind: TypeKind::Bool,
-                };
+                match type_kind {
+                    TypeKind::Option { .. } => {
+                        let has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::MemberAccess {
+                                expression: expression.clone(),
+                                member: "has_value".to_string(),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let not_has_value = CheckedExpression {
+                            kind: CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Not {
+                                    result: TypeKind::Bool,
+                                },
+                                operand: Box::new(has_value),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
 
-                let return_statement = match return_context {
-                    TypeKind::Void => CheckedStatement::Return { expression: None },
-                    TypeKind::Option {
-                        reference_type: return_ref_type,
-                    } => CheckedStatement::Return {
-                        expression: Some(Self::none_optional_expression(
-                            return_context,
-                            return_ref_type,
-                        )),
-                    },
+                        let return_statement = match return_context {
+                            TypeKind::Void => CheckedStatement::Return { expression: None },
+                            TypeKind::Option {
+                                reference_type: return_ref_type,
+                            } => CheckedStatement::Return {
+                                expression: Some(CheckedExpression {
+                                    type_kind: return_context.clone(),
+                                    kind: CheckedExpressionKind::None(*return_ref_type.clone()),
+                                }),
+                            },
+                            _ => unreachable!(),
+                        };
+                        let if_statement = CheckedStatement::If {
+                            condition: not_has_value,
+                            body: Box::new(return_statement),
+                            else_branch: None,
+                        };
+
+                        (
+                            vec![if_statement],
+                            CheckedExpression {
+                                kind: CheckedExpressionKind::MemberAccess {
+                                    expression: expression.clone(),
+                                    member: "value".to_string(),
+                                },
+                                type_kind,
+                            },
+                        )
+                    }
+                    TypeKind::Pointer { reference_type } => {
+                        let var_type = TypeKind::Pointer {
+                            reference_type: reference_type.clone(),
+                        };
+                        let var_name = self.gensym.generate("var");
+                        let var_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: var_type.clone(),
+                            name: var_name.clone(),
+                            initialiser: Some(*expression.clone()),
+                        };
+                        let variable = CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: var_name,
+                                mutable: false,
+                            },
+                            type_kind: var_type,
+                        };
+                        let not_null = CheckedExpression {
+                            kind: CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Not {
+                                    result: TypeKind::Bool,
+                                },
+                                operand: Box::new(variable.clone()),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+
+                        let return_statement = match return_context {
+                            TypeKind::Void => CheckedStatement::Return { expression: None },
+                            TypeKind::Option {
+                                reference_type: return_ref_type,
+                            } => CheckedStatement::Return {
+                                expression: Some(CheckedExpression {
+                                    type_kind: return_context.clone(),
+                                    kind: CheckedExpressionKind::None(*return_ref_type.clone()),
+                                }),
+                            },
+                            _ => unreachable!(),
+                        };
+                        let if_statement = CheckedStatement::If {
+                            condition: not_null,
+                            body: Box::new(return_statement),
+                            else_branch: None,
+                        };
+
+                        (
+                            vec![var_decl, if_statement],
+                            CheckedExpression {
+                                kind: CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Deref {
+                                        result: *reference_type.clone(),
+                                    },
+                                    operand: Box::new(variable),
+                                },
+                                type_kind: *reference_type,
+                            },
+                        )
+                    }
                     _ => unreachable!(),
-                };
-                let if_statement = CheckedStatement::If {
-                    condition: not_has_value,
-                    body: Box::new(return_statement),
-                    else_branch: None,
-                };
-
-                (
-                    vec![if_statement],
-                    CheckedExpression {
-                        kind: CheckedExpressionKind::MemberAccess {
-                            expression: expression.clone(),
-                            member: "value".to_string(),
-                        },
-                        type_kind,
-                    },
-                )
+                }
             }
             CheckedExpressionKind::MemberAccess { expression, member } => {
                 let (prep_statements, rewritten_expr) =
-                    Self::rewrite_expression(expression, return_context);
+                    self.rewrite_expression(expression, return_context);
 
                 //TODO: avoid allocating anything if nothing was rewritten
                 (
@@ -551,7 +668,7 @@ impl Rewriter {
 
                 for argument in arguments {
                     let (prep_stmts, rewritten_argument) =
-                        Self::rewrite_expression(argument, return_context);
+                        self.rewrite_expression(argument, return_context);
 
                     for stmt in prep_stmts {
                         statements.push(stmt);
@@ -575,7 +692,7 @@ impl Rewriter {
             CheckedExpressionKind::StringLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::Parenthesized(expr) => {
                 let (prep_statements, rewritten_expr) =
-                    Self::rewrite_expression(expr, return_context);
+                    self.rewrite_expression(expr, return_context);
                 (
                     prep_statements,
                     CheckedExpression {
@@ -590,7 +707,7 @@ impl Rewriter {
 
                 for element in elements {
                     let (prep_stmts, rewritten_argument) =
-                        Self::rewrite_expression(element, return_context);
+                        self.rewrite_expression(element, return_context);
 
                     for stmt in prep_stmts {
                         statements.push(stmt);
@@ -613,12 +730,12 @@ impl Rewriter {
             } => {
                 let mut statements = Vec::new();
                 let (left_prep_stmts, rewritten_left) =
-                    Self::rewrite_expression(left, return_context);
+                    self.rewrite_expression(left, return_context);
                 for stmt in left_prep_stmts {
                     statements.push(stmt);
                 }
                 let (right_prep_stmts, rewritten_right) =
-                    Self::rewrite_expression(right, return_context);
+                    self.rewrite_expression(right, return_context);
                 for stmt in right_prep_stmts {
                     statements.push(stmt);
                 }
@@ -637,7 +754,7 @@ impl Rewriter {
             }
             CheckedExpressionKind::Unary { operator, operand } => {
                 let (prep_stmts, rewritten_operand) =
-                    Self::rewrite_expression(operand, return_context);
+                    self.rewrite_expression(operand, return_context);
 
                 (
                     prep_stmts,
@@ -654,12 +771,12 @@ impl Rewriter {
             CheckedExpressionKind::ArrayIndex { array, index } => {
                 let mut statements = Vec::new();
                 let (array_prep_stmts, rewritten_array) =
-                    Self::rewrite_expression(array, return_context);
+                    self.rewrite_expression(array, return_context);
                 for stmt in array_prep_stmts {
                     statements.push(stmt);
                 }
                 let (index_prep_stmts, rewritten_index) =
-                    Self::rewrite_expression(index, return_context);
+                    self.rewrite_expression(index, return_context);
                 for stmt in index_prep_stmts {
                     statements.push(stmt);
                 }
@@ -685,7 +802,7 @@ impl Rewriter {
                 let mut rewritten_fields = Vec::new();
                 for (field_name, initialiser) in fields {
                     let (prep_stmts, rewritten_field) =
-                        Self::rewrite_expression(initialiser, &initialiser.type_kind);
+                        self.rewrite_expression(initialiser, &initialiser.type_kind);
 
                     for stmt in prep_stmts {
                         statements.push(stmt);
@@ -708,12 +825,12 @@ impl Rewriter {
             CheckedExpressionKind::ArraySlice { array, range } => {
                 let mut statements = Vec::new();
                 let (array_prep_stmts, rewritten_array) =
-                    Self::rewrite_expression(array, return_context);
+                    self.rewrite_expression(array, return_context);
                 for stmt in array_prep_stmts {
                     statements.push(stmt);
                 }
                 let (range_prep_stmts, rewritten_range) =
-                    Self::rewrite_expression(range, return_context);
+                    self.rewrite_expression(range, return_context);
                 for stmt in range_prep_stmts {
                     statements.push(stmt);
                 }
@@ -732,12 +849,12 @@ impl Rewriter {
             CheckedExpressionKind::Range { lower, upper } => {
                 let mut statements = Vec::new();
                 let (lower_prep_stmts, rewritten_lower) =
-                    Self::rewrite_expression(lower, return_context);
+                    self.rewrite_expression(lower, return_context);
                 for stmt in lower_prep_stmts {
                     statements.push(stmt);
                 }
                 let (upper_prep_stmts, rewritten_upper) =
-                    Self::rewrite_expression(upper, return_context);
+                    self.rewrite_expression(upper, return_context);
                 for stmt in upper_prep_stmts {
                     statements.push(stmt);
                 }
@@ -814,59 +931,161 @@ impl Rewriter {
                             },
                         )
                     }
+                    TypeKind::Pointer { reference_type } => {
+                        let var_type = TypeKind::Pointer {
+                            reference_type: reference_type.clone(),
+                        };
+                        let var_name = self.gensym.generate("var");
+                        let var_decl = CheckedStatement::VariableDeclaration {
+                            type_kind: var_type.clone(),
+                            name: var_name.clone(),
+                            initialiser: Some(*expression.clone()),
+                        };
+                        let variable = CheckedExpression {
+                            kind: CheckedExpressionKind::Variable {
+                                name: var_name,
+                                mutable: false,
+                            },
+                            type_kind: var_type,
+                        };
+                        let not_null = CheckedExpression {
+                            kind: CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Not {
+                                    result: TypeKind::Bool,
+                                },
+                                operand: Box::new(variable.clone()),
+                            },
+                            type_kind: TypeKind::Bool,
+                        };
+                        let if_statement = CheckedStatement::If {
+                            condition: not_null,
+                            body: body.clone(),
+                            else_branch: None,
+                        };
+
+                        (
+                            vec![var_decl, if_statement],
+                            CheckedExpression {
+                                kind: CheckedExpressionKind::Unary {
+                                    operator: CheckedUnaryOp::Deref {
+                                        result: *reference_type.clone(),
+                                    },
+                                    operand: Box::new(variable),
+                                },
+                                type_kind: *reference_type.clone(),
+                            },
+                        )
+                    }
                     _ => unreachable!(),
                 }
             }
-        }
-    }
+            CheckedExpressionKind::Some(expression) => {
+                let (prep_stmts, rewritten_expression) =
+                    self.rewrite_expression(expression, return_context);
 
-    fn none_optional_expression(
-        return_context: &TypeKind,
-        return_ref_type: &TypeKind,
-    ) -> CheckedExpression {
-        CheckedExpression {
-            kind: CheckedExpressionKind::StructLiteral {
-                name: format!("Option_{}", return_ref_type),
-                fields: vec![(
-                    "has_value".to_string(),
+                (
+                    prep_stmts,
                     CheckedExpression {
-                        kind: CheckedExpressionKind::BoolLiteral(false),
-                        type_kind: TypeKind::Bool,
+                        kind: CheckedExpressionKind::Some(Box::new(rewritten_expression)),
+                        type_kind: expr.type_kind.clone(),
                     },
-                )],
-                struct_type: TypeKind::Struct {
-                    name: format!("Option_{}", return_ref_type),
-                    fields: vec![],
-                },
-            },
-            type_kind: return_context.clone(),
-        }
-    }
+                )
+            }
+            CheckedExpressionKind::None(_) => (vec![], expr.clone()),
+            CheckedExpressionKind::MatchArm { .. } => {
+                todo!()
+            }
+            CheckedExpressionKind::Match {
+                expression,
+                arms,
+                default,
+            } => {
+                let (prep_stmts, rewritten_expression) =
+                    self.rewrite_expression(expression, return_context);
 
-    fn some_optional_expression(
-        expression: CheckedExpression,
-        return_context: &TypeKind,
-        return_ref_type: &TypeKind,
-    ) -> CheckedExpression {
-        CheckedExpression {
-            kind: CheckedExpressionKind::StructLiteral {
-                name: format!("Option_{}", return_ref_type),
-                fields: vec![
-                    (
-                        "has_value".to_string(),
-                        CheckedExpression {
-                            kind: CheckedExpressionKind::BoolLiteral(true),
-                            type_kind: TypeKind::Bool,
+                /*
+                   s: String = match foo {
+                       a => "bar",
+                       b => "baz",
+                       else => "quux",
+                   };
+                */
+                //into:
+                /*
+                var_0: String;
+                match foo {
+                   a => var_0 = "bar";
+                   b => var_0 = "baz";
+                   else => var_0 = "quux";
+                }
+                s := var_0;
+                 */
+                let var_type = &arms.first().unwrap().type_kind;
+                let var_name = self.gensym.generate("var");
+                let var_decl = CheckedStatement::VariableDeclaration {
+                    type_kind: var_type.clone(),
+                    name: var_name.clone(),
+                    initialiser: None,
+                };
+                let variable = CheckedExpression {
+                    kind: CheckedExpressionKind::Variable {
+                        name: var_name,
+                        mutable: false,
+                    },
+                    type_kind: var_type.clone(),
+                };
+
+                let mut rewritten_arms = Vec::new();
+                for arm in arms {
+                    if let CheckedExpressionKind::MatchArm { pattern, value } = &arm.kind {
+                        let value_type = value.type_kind.clone();
+                        rewritten_arms.push(CheckedStatement::MatchArm {
+                            pattern: *pattern.clone(),
+                            body: Box::new(CheckedStatement::Expression(CheckedExpression {
+                                kind: CheckedExpressionKind::Binary {
+                                    left: Box::new(variable.clone()),
+                                    operator: CheckedBinaryOp::Assign {
+                                        result: value_type.clone(),
+                                    },
+                                    right: value.clone(),
+                                },
+                                type_kind: value_type.clone(),
+                            })),
+                        });
+                    } else {
+                        unreachable!()
+                    }
+                }
+
+                let rewritten_default = if let Some(value) = default {
+                    let value_type = value.type_kind.clone();
+                    Some(Box::new(CheckedStatement::Expression(CheckedExpression {
+                        kind: CheckedExpressionKind::Binary {
+                            left: Box::new(variable.clone()),
+                            operator: CheckedBinaryOp::Assign {
+                                result: value_type.clone(),
+                            },
+                            right: value.clone(),
                         },
-                    ),
-                    ("value".to_string(), expression),
-                ],
-                struct_type: TypeKind::Struct {
-                    name: format!("Option_{}", return_ref_type),
-                    fields: vec![],
-                },
-            },
-            type_kind: return_context.clone(),
+                        type_kind: value_type.clone(),
+                    })))
+                } else {
+                    None
+                };
+
+                let mut statements = Vec::new();
+                for stmt in prep_stmts {
+                    statements.push(stmt);
+                }
+                statements.push(var_decl);
+                statements.push(CheckedStatement::Match {
+                    expression: rewritten_expression,
+                    arms: rewritten_arms,
+                    default: rewritten_default,
+                });
+
+                (statements, variable)
+            }
         }
     }
 }

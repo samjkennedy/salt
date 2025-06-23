@@ -12,6 +12,7 @@ pub enum TokenKind {
     Percent,
     Ampersand,
     Equals,
+    EqualsEquals,
     OpenParen,
     CloseParen,
     OpenCurly,
@@ -21,6 +22,7 @@ pub enum TokenKind {
     OpenSquare,
     CloseSquare,
     Colon,
+    ColonColon,
     Semicolon,
     Comma,
     Question,
@@ -39,6 +41,10 @@ pub enum TokenKind {
     ForKeyword,
     InKeyword,
     GuardKeyword,
+    EnumKeyword,
+    ExternKeyword,
+    MatchKeyword,
+    FatArrow,
     EndOfFile,
 }
 
@@ -85,7 +91,19 @@ impl<'src> Lexer<'src> {
                 '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
                 '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
                 '&' => Ok(self.make_token(TokenKind::Ampersand, "&".to_owned())),
-                '=' => Ok(self.make_token(TokenKind::Equals, "=".to_owned())),
+                '=' => {
+                    self.cursor += 1;
+                    if let Some('=') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::EqualsEquals, "==".to_owned()))
+                    } else if let Some('>') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::FatArrow, "=>".to_owned()))
+                    } else {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::Equals, "=".to_owned()))
+                    }
+                }
                 '(' => Ok(self.make_token(TokenKind::OpenParen, "(".to_owned())),
                 ')' => Ok(self.make_token(TokenKind::CloseParen, ")".to_owned())),
                 '{' => Ok(self.make_token(TokenKind::OpenCurly, "{".to_owned())),
@@ -95,7 +113,16 @@ impl<'src> Lexer<'src> {
                 '[' => Ok(self.make_token(TokenKind::OpenSquare, "[".to_owned())),
                 ']' => Ok(self.make_token(TokenKind::CloseSquare, "]".to_owned())),
                 ';' => Ok(self.make_token(TokenKind::Semicolon, ";".to_owned())),
-                ':' => Ok(self.make_token(TokenKind::Colon, ":".to_owned())),
+                ':' => {
+                    self.cursor += 1;
+                    if let Some(':') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::ColonColon, "::".to_owned()))
+                    } else {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::Colon, ":".to_owned()))
+                    }
+                }
                 ',' => Ok(self.make_token(TokenKind::Comma, ",".to_owned())),
                 '?' => Ok(self.make_token(TokenKind::Question, ",".to_owned())),
                 '.' => {
@@ -301,6 +328,21 @@ impl<'src> Lexer<'src> {
             },
             "guard" => Token {
                 kind: TokenKind::GuardKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "enum" => Token {
+                kind: TokenKind::EnumKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "extern" => Token {
+                kind: TokenKind::ExternKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "match" => Token {
+                kind: TokenKind::MatchKeyword,
                 span,
                 text: value.to_owned(),
             },

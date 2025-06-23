@@ -1,4 +1,4 @@
-i64 choice_return(i64 i) {
+choice_return(i: i64): i64 {
     if (i < 8) {
         return 0;
     } else if (i < 16) {
@@ -8,9 +8,9 @@ i64 choice_return(i64 i) {
 }
 
 main(): void {
-    i64 x = 10;
+    x := 10;
 
-    print(choice_return(x));
-    print(choice_return(x + x));
-    print(choice_return(0));
+    println(choice_return(x));
+    println(choice_return(x + x));
+    println(choice_return(0));
 }

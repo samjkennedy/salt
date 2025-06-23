@@ -22,7 +22,7 @@ pub enum CheckedStatement {
     VariableDeclaration {
         type_kind: TypeKind,
         name: String,
-        initialiser: CheckedExpression,
+        initialiser: Option<CheckedExpression>,
     },
     While {
         condition: CheckedExpression,
@@ -49,8 +49,26 @@ pub enum CheckedStatement {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+    },
+    ExternFunction {
+        name: String,
+        parameters: Vec<FunctionParam>,
+        return_type: TypeKind,
+    },
     Continue,
     Break,
+    MatchArm {
+        pattern: CheckedExpression,
+        body: Box<CheckedStatement>,
+    },
+    Match {
+        expression: CheckedExpression,
+        arms: Vec<CheckedStatement>,
+        default: Option<Box<CheckedStatement>>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -79,6 +97,11 @@ pub enum TypeKind {
         name: String,
         fields: Vec<CheckedStatement>,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+        tag: Box<TypeKind>,
+    },
     Range,
 }
 
@@ -103,7 +126,7 @@ impl Display for TypeKind {
             TypeKind::Option { reference_type } => {
                 write!(f, "?{}", reference_type)
             }
-            TypeKind::Struct { name, .. } => write!(f, "{}", name),
+            TypeKind::Struct { name, .. } | TypeKind::Enum { name, .. } => write!(f, "{}", name),
             TypeKind::Range => write!(f, "range"),
         }
     }
@@ -118,6 +141,7 @@ pub enum CheckedBinaryOp {
     Mod { result: TypeKind },
     Lt { result: TypeKind },
     Gt { result: TypeKind },
+    Eq { result: TypeKind },
     Assign { result: TypeKind },
 }
 
@@ -131,6 +155,7 @@ impl CheckedBinaryOp {
             CheckedBinaryOp::Mod { result } => result.clone(),
             CheckedBinaryOp::Lt { result } => result.clone(),
             CheckedBinaryOp::Gt { result } => result.clone(),
+            CheckedBinaryOp::Eq { result } => result.clone(),
             CheckedBinaryOp::Assign { result } => result.clone(),
         }
     }
@@ -190,6 +215,10 @@ impl CheckedExpression {
             CheckedExpressionKind::ArraySlice { .. } => false,
             CheckedExpressionKind::OptionUnwrap { .. } => false,
             CheckedExpressionKind::Guard { .. } => false,
+            CheckedExpressionKind::Some(_) => false,
+            CheckedExpressionKind::None(_) => false,
+            CheckedExpressionKind::MatchArm { .. } => false,
+            CheckedExpressionKind::Match { .. } => false,
         }
     }
 }
@@ -246,10 +275,21 @@ pub enum CheckedExpressionKind {
         expression: Box<CheckedExpression>,
         body: Box<CheckedStatement>,
     },
+    Some(Box<CheckedExpression>),
+    None(TypeKind),
+    MatchArm {
+        pattern: Box<CheckedExpression>,
+        value: Box<CheckedExpression>,
+    },
+    Match {
+        expression: Box<CheckedExpression>,
+        arms: Vec<CheckedExpression>,
+        default: Option<Box<CheckedExpression>>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-struct FunctionParam {
+pub struct FunctionParam {
     type_kind: TypeKind,
     mutable: bool,
 }
@@ -262,9 +302,9 @@ enum ScopedIdentifier {
         mutable: bool,
     },
     Function {
-        return_type: TypeKind,
         name: String,
         params: Vec<FunctionParam>,
+        return_type: TypeKind,
     },
     Type {
         type_kind: TypeKind,
@@ -279,14 +319,30 @@ struct Scope {
 impl Scope {
     fn new(return_context: TypeKind) -> Scope {
         Scope {
-            identifiers: vec![ScopedIdentifier::Function {
-                return_type: TypeKind::Void,
-                name: "print".to_string(),
-                params: vec![FunctionParam {
-                    type_kind: TypeKind::Any,
-                    mutable: false,
-                }], //TODO: varargs
-            }],
+            identifiers: vec![
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Void,
+                    name: "print".to_string(),
+                    params: vec![FunctionParam {
+                        type_kind: TypeKind::Any,
+                        mutable: false,
+                    }], //TODO: varargs
+                },
+                ScopedIdentifier::Function {
+                    return_type: TypeKind::Void,
+                    name: "println".to_string(),
+                    params: vec![FunctionParam {
+                        type_kind: TypeKind::Any,
+                        mutable: false,
+                    }], //TODO: varargs
+                },
+                ScopedIdentifier::Type {
+                    type_kind: TypeKind::Struct {
+                        name: "FILE".to_string(),
+                        fields: vec![],
+                    },
+                },
+            ],
             return_context,
         }
     }
@@ -489,6 +545,38 @@ impl<'src> TypeChecker<'src> {
                     fields: checked_fields,
                 })
             }
+            StatementKind::Enum {
+                identifier,
+                variants,
+            } => {
+                let mut variant_names = Vec::new();
+
+                for variant in variants {
+                    if variant_names.contains(&variant.text) {
+                        return Err(Diagnostic::new(
+                            format!("duplicate enum variant `{}`", variant.text),
+                            variant.span,
+                        ));
+                    }
+                    variant_names.push(variant.text);
+                }
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Type {
+                        type_kind: TypeKind::Enum {
+                            name: identifier.text.clone(),
+                            variants: variant_names.clone(),
+                            tag: Box::new(TypeKind::I64),
+                        },
+                    },
+                    identifier.span,
+                )?;
+
+                Ok(CheckedStatement::Enum {
+                    name: identifier.text,
+                    variants: variant_names,
+                })
+            }
             StatementKind::VariableDeclaration {
                 identifier,
                 type_expression,
@@ -688,10 +776,12 @@ impl<'src> TypeChecker<'src> {
                 }
 
                 match &checked_expression.type_kind.clone() {
-                    TypeKind::Option { .. } | TypeKind::Bool => Ok(CheckedStatement::Guard {
-                        expression: checked_expression,
-                        body: Box::new(checked_body),
-                    }),
+                    TypeKind::Option { .. } | TypeKind::Bool | TypeKind::Pointer { .. } => {
+                        Ok(CheckedStatement::Guard {
+                            expression: checked_expression,
+                            body: Box::new(checked_body),
+                        })
+                    }
                     _ => Err(Diagnostic::new(
                         format!(
                             "cannot guard against type `{}`",
@@ -700,6 +790,90 @@ impl<'src> TypeChecker<'src> {
                         expression_span,
                     )),
                 }
+            }
+            StatementKind::ExternFunction {
+                identifier,
+                parameters,
+                return_type,
+            } => {
+                let mut checked_parameters = Vec::new();
+                for parameter in parameters {
+                    checked_parameters.push(FunctionParam {
+                        type_kind: self.bind_type_kind(parameter)?,
+                        mutable: false,
+                    });
+                }
+                let checked_return_type = self.bind_type_kind(return_type)?;
+
+                self.try_declare_identifier(
+                    ScopedIdentifier::Function {
+                        name: identifier.text.clone(),
+                        params: checked_parameters.clone(),
+                        return_type: checked_return_type.clone(),
+                    },
+                    statement.span,
+                )?;
+
+                Ok(CheckedStatement::ExternFunction {
+                    name: identifier.text,
+                    parameters: checked_parameters,
+                    return_type: checked_return_type,
+                })
+            }
+            StatementKind::MatchArm { pattern, body } => {
+                let checked_pattern = self.check_expr(pattern)?;
+                let checked_body = self.check_statement(*body, in_loop)?;
+
+                Ok(CheckedStatement::MatchArm {
+                    pattern: checked_pattern,
+                    body: Box::new(checked_body),
+                })
+            }
+            StatementKind::Match {
+                expression,
+                arms,
+                default,
+            } => {
+                let expression_span = expression.span;
+                let checked_expression = self.check_expr(expression)?;
+
+                match &checked_expression.type_kind {
+                    TypeKind::Enum { .. } => { /*can be matched*/ }
+                    _ => {
+                        match Self::expect_type(
+                            &TypeKind::I64,
+                            &checked_expression.type_kind,
+                            expression_span,
+                        ) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                return Err(Diagnostic::new(
+                                    format!(
+                                        "type `{}` is not a valid match target",
+                                        checked_expression.type_kind
+                                    ),
+                                    expression_span,
+                                ))
+                            }
+                        }
+                    }
+                }
+
+                let mut checked_arms = Vec::new();
+                for arm in arms {
+                    checked_arms.push(self.check_statement(arm, false)?);
+                }
+
+                let checked_default = match default {
+                    Some(default) => Some(Box::new(self.check_statement(*default, in_loop)?)),
+                    None => None,
+                };
+
+                Ok(CheckedStatement::Match {
+                    expression: checked_expression,
+                    arms: checked_arms,
+                    default: checked_default,
+                })
             }
         }
     }
@@ -825,7 +999,7 @@ impl<'src> TypeChecker<'src> {
 
         if return_type_kind != TypeKind::Void && !Self::all_branches_return(&checked_body) {
             return Err(Diagnostic {
-                message: "not all branches return".to_string(),
+                message: "not all branches return a value".to_string(),
                 hint: None,
                 span: name_token.span,
             });
@@ -849,7 +1023,10 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_return(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
+            CheckedStatement::FunctionDefinition { .. }
+            | CheckedStatement::Struct { .. }
+            | CheckedStatement::Enum { .. }
+            | CheckedStatement::ExternFunction { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -870,6 +1047,8 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Return { .. } => true,
             CheckedStatement::Continue => false,
             CheckedStatement::Break => false,
+            CheckedStatement::MatchArm { body, .. } => Self::all_branches_return(body),
+            CheckedStatement::Match { arms, .. } => arms.iter().all(Self::all_branches_return),
         }
     }
 
@@ -883,7 +1062,10 @@ impl<'src> TypeChecker<'src> {
                 //This doesn't seem quite right
                 Self::all_branches_exit_scope(statements.last().unwrap())
             }
-            CheckedStatement::FunctionDefinition { .. } | CheckedStatement::Struct { .. } => false,
+            CheckedStatement::FunctionDefinition { .. }
+            | CheckedStatement::Struct { .. }
+            | CheckedStatement::Enum { .. }
+            | CheckedStatement::ExternFunction { .. } => false,
             CheckedStatement::Parameter { .. } => unreachable!(),
             CheckedStatement::VariableDeclaration { .. } => false,
             CheckedStatement::While { .. } => false, //TODO technically if condition is always true and body returns, this is true
@@ -905,6 +1087,8 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Return { .. } => true,
             CheckedStatement::Continue => true,
             CheckedStatement::Break => true,
+            CheckedStatement::MatchArm { body, .. } => Self::all_branches_exit_scope(body),
+            CheckedStatement::Match { arms, .. } => arms.iter().all(Self::all_branches_exit_scope),
         }
     }
 
@@ -941,7 +1125,7 @@ impl<'src> TypeChecker<'src> {
         Ok(CheckedStatement::VariableDeclaration {
             type_kind,
             name: variable_name,
-            initialiser: checked_initialiser,
+            initialiser: Some(checked_initialiser),
         })
     }
 
@@ -955,12 +1139,18 @@ impl<'src> TypeChecker<'src> {
                 kind: CheckedExpressionKind::IntLiteral(value),
                 type_kind: TypeKind::I64,
             }),
-            ExpressionKind::StringLiteral(value) => Ok(CheckedExpression {
-                kind: CheckedExpressionKind::StringLiteral(value),
-                type_kind: TypeKind::Slice {
+            ExpressionKind::StringLiteral(value) => {
+                let slice_char_type = TypeKind::Slice {
                     element_type: Box::new(TypeKind::Char),
-                },
-            }),
+                };
+                self.module.add_type(&slice_char_type);
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::StringLiteral(value),
+                    type_kind: TypeKind::Slice {
+                        element_type: Box::new(TypeKind::Char),
+                    },
+                })
+            }
             ExpressionKind::Parenthesized(expr) => {
                 let checked_expr = self.check_expr(*expr)?;
                 Ok(CheckedExpression {
@@ -1344,36 +1534,35 @@ impl<'src> TypeChecker<'src> {
                 let expression_span = expr.span;
                 let checked_expression = self.check_expr(*expression)?;
 
-                if let TypeKind::Option { reference_type } = &checked_expression.type_kind {
-                    match self.get_return_context() {
-                        TypeKind::Void => {
-                            //gucci
+                match &checked_expression.type_kind {
+                    //TODO: Consider a different operation for pointers that doesn't unwrap them, `^`
+                    TypeKind::Option { reference_type } | TypeKind::Pointer { reference_type } => {
+                        match self.get_return_context() {
+                            TypeKind::Void | TypeKind::Option { .. } => {
+                                //All good
+                            }
+                            _ => {
+                                return Err(Diagnostic::new(
+                                    format!("cannot unwrap optional type `{}` in non-void or non-optional return context `{}`", checked_expression.type_kind, self.get_return_context()),
+                                    expression_span,
+                                ))
+                            }
                         }
-                        TypeKind::Option { reference_type: inner } => {
-                            Self::expect_type(reference_type, &inner, expression_span)?;
-                        }
-                        _ => {
-                            return Err(Diagnostic::new(
-                                format!("cannot unwrap optional type `{}` in non-void or non-optional return context `{}`", checked_expression.type_kind, self.get_return_context()),
-                                expression_span,
-                            ))
-                        }
-                    }
 
-                    Ok(CheckedExpression {
-                        type_kind: *reference_type.clone(),
-                        kind: CheckedExpressionKind::OptionUnwrap {
-                            expression: Box::new(checked_expression),
-                        },
-                    })
-                } else {
-                    Err(Diagnostic::new(
+                        Ok(CheckedExpression {
+                            type_kind: *reference_type.clone(),
+                            kind: CheckedExpressionKind::OptionUnwrap {
+                                expression: Box::new(checked_expression),
+                            },
+                        })
+                    }
+                    _ => Err(Diagnostic::new(
                         format!(
                             "cannot unwrap non-optional type `{}`",
                             checked_expression.type_kind
                         ),
                         expression_span,
-                    ))
+                    )),
                 }
             }
             ExpressionKind::Guard { expression, body } => {
@@ -1397,6 +1586,13 @@ impl<'src> TypeChecker<'src> {
                         },
                         type_kind: *reference_type.clone(),
                     }),
+                    TypeKind::Pointer { reference_type } => Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::Guard {
+                            expression: Box::new(checked_expression),
+                            body: Box::new(checked_body),
+                        },
+                        type_kind: *reference_type.clone(),
+                    }),
                     TypeKind::Bool => Ok(CheckedExpression {
                         kind: CheckedExpressionKind::Guard {
                             expression: Box::new(checked_expression),
@@ -1412,6 +1608,167 @@ impl<'src> TypeChecker<'src> {
                         expression_span,
                     )),
                 }
+            }
+            ExpressionKind::StaticAccess { namespace, member } => match namespace.kind {
+                //TODO This could benefit from being recursive
+                ExpressionKind::Variable(token) => match self.get_identifier(&token.text) {
+                    None => Err(Diagnostic::new(
+                        format!("no such namespace `{}` in scope", token.text),
+                        namespace.span,
+                    )),
+                    Some(identifier) => match identifier {
+                        ScopedIdentifier::Variable { .. } | ScopedIdentifier::Function { .. } => {
+                            Err(Diagnostic::new(
+                                "static access is not allowed here".to_string(),
+                                expr.span,
+                            ))
+                        }
+                        ScopedIdentifier::Type { type_kind } => match &type_kind {
+                            TypeKind::Enum { variants, .. } => {
+                                if let ExpressionKind::Variable(member) = member.kind {
+                                    if variants.contains(&member.text) {
+                                        Ok(CheckedExpression {
+                                            kind: CheckedExpressionKind::IntLiteral(
+                                                variants
+                                                    .iter()
+                                                    .position(|x| x == &member.text)
+                                                    .unwrap()
+                                                    as i64, //TODO: use the tag, requires IntLiteral to also take a TypeKind
+                                            ),
+                                            type_kind,
+                                        })
+                                    } else {
+                                        Err(Diagnostic::new(
+                                            format!(
+                                                "no such enum variant `{}` in `{}`",
+                                                member.text, type_kind
+                                            ),
+                                            member.span,
+                                        ))
+                                    }
+                                } else {
+                                    Err(Diagnostic::new(
+                                        "member must be an identifier".to_string(),
+                                        member.span,
+                                    ))
+                                }
+                            }
+                            _ => Err(Diagnostic::new(
+                                format!("static access is not allowed on type `{}`", type_kind),
+                                expr.span,
+                            )),
+                        },
+                    },
+                },
+                ExpressionKind::StaticAccess { .. } => todo!("nested static access"),
+                _ => Err(Diagnostic::new(
+                    "static access is not allowed here".to_string(),
+                    expr.span,
+                )),
+            },
+            ExpressionKind::MatchArm { pattern, value } => {
+                let checked_pattern = self.check_expr(*pattern)?;
+                let checked_value = self.check_expr(*value)?;
+
+                Ok(CheckedExpression {
+                    type_kind: checked_value.type_kind.clone(),
+                    kind: CheckedExpressionKind::MatchArm {
+                        pattern: Box::new(checked_pattern),
+                        value: Box::new(checked_value),
+                    },
+                })
+            }
+            ExpressionKind::Match {
+                expression,
+                arms,
+                default,
+            } => {
+                let checked_expression = self.check_expr(*expression)?;
+
+                let mut result_type = None;
+                let mut checked_arms = Vec::new();
+
+                let mut exhaustive;
+
+                for arm in arms {
+                    let arm_span = arm.span;
+                    let checked_arm = self.check_expr(arm)?;
+
+                    if let CheckedExpressionKind::MatchArm { pattern, value } = &checked_arm.kind {
+                        Self::expect_type(
+                            &checked_expression.type_kind,
+                            &pattern.type_kind,
+                            arm_span,
+                        )?;
+
+                        if result_type.is_none() {
+                            result_type = Some(checked_arm.type_kind.clone());
+                        } else {
+                            Self::expect_type(
+                                &result_type.clone().unwrap(),
+                                &value.type_kind,
+                                arm_span, //TODO: would be nice if this was just the value span
+                            )?;
+                        }
+                        checked_arms.push(checked_arm);
+                    } else {
+                        unreachable!()
+                    }
+                }
+
+                exhaustive =
+                    Self::check_match_exhaustiveness(&checked_expression.type_kind, &checked_arms);
+
+                let checked_default = if let Some(default_value) = default {
+                    if exhaustive {
+                        return Err(Diagnostic::with_hint(
+                            "match expression is exhaustive, else branch is redundant".to_string(),
+                            "consider removing the else branch".to_string(),
+                            default_value.span,
+                        ));
+                    }
+
+                    let default_span = default_value.span;
+                    let checked_default = self.check_expr(*default_value)?;
+                    if result_type.is_none() {
+                        result_type = Some(checked_default.type_kind.clone());
+                    } else {
+                        Self::expect_type(
+                            &result_type.clone().unwrap(),
+                            &checked_default.type_kind,
+                            default_span,
+                        )?;
+                    }
+
+                    exhaustive = true;
+
+                    Some(Box::new(checked_default))
+                } else {
+                    None
+                };
+
+                if !exhaustive {
+                    return Err(Diagnostic::new(
+                        "match expression is not exhaustive".to_string(),
+                        expr.span,
+                    ));
+                }
+
+                if result_type.is_none() {
+                    return Err(Diagnostic::new(
+                        "could not determine return type of match expression".to_string(),
+                        expr.span,
+                    ));
+                }
+
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::Match {
+                        expression: Box::new(checked_expression),
+                        arms: checked_arms,
+                        default: checked_default,
+                    },
+                    type_kind: result_type.unwrap(),
+                })
             }
         }
     }
@@ -1652,6 +2009,12 @@ impl<'src> TypeChecker<'src> {
                 }
                 Ok(CheckedBinaryOp::Assign { result: right })
             }
+            BinaryOp::Eq => {
+                Self::expect_type(&left, &right, span)?;
+                Ok(CheckedBinaryOp::Eq {
+                    result: TypeKind::Bool,
+                })
+            }
         }
     }
 
@@ -1699,6 +2062,7 @@ impl<'src> TypeChecker<'src> {
             TypeExpression::Simple(token) => match token.text.as_str() {
                 "void" => Ok(TypeKind::Void),
                 "bool" => Ok(TypeKind::Bool),
+                "char" => Ok(TypeKind::Char),
                 "i64" => Ok(TypeKind::I64),
                 "f32" => Ok(TypeKind::F32),
                 "String" => {
@@ -1753,5 +2117,12 @@ impl<'src> TypeChecker<'src> {
                 Ok(option_type)
             }
         }
+    }
+
+    fn check_match_exhaustiveness(type_kind: &TypeKind, arms: &[CheckedExpression]) -> bool {
+        if let TypeKind::Enum { variants, .. } = type_kind {
+            return variants.len() == arms.len();
+        }
+        false
     }
 }

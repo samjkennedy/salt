@@ -46,6 +46,24 @@ pub enum StatementKind {
         identifier: Token,
         fields: Vec<Statement>,
     },
+    Enum {
+        identifier: Token,
+        variants: Vec<Token>,
+    },
+    ExternFunction {
+        identifier: Token,
+        parameters: Vec<TypeExpression>,
+        return_type: TypeExpression,
+    },
+    MatchArm {
+        pattern: Expression,
+        body: Box<Statement>,
+    },
+    Match {
+        expression: Expression,
+        arms: Vec<Statement>,
+        default: Option<Box<Statement>>,
+    },
     //TODO labels
     Continue,
     Break,
@@ -66,6 +84,7 @@ pub enum BinaryOp {
     Mod,
     Lt,
     Gt,
+    Eq,
     Assign,
 }
 
@@ -110,6 +129,10 @@ pub enum ExpressionKind {
         expression: Box<Expression>,
         member: Token,
     },
+    StaticAccess {
+        namespace: Box<Expression>,
+        member: Box<Expression>,
+    },
     Range {
         lower: Box<Expression>,
         upper: Box<Expression>,
@@ -120,6 +143,15 @@ pub enum ExpressionKind {
     Guard {
         expression: Box<Expression>,
         body: Box<Statement>,
+    },
+    MatchArm {
+        pattern: Box<Expression>,
+        value: Box<Expression>,
+    },
+    Match {
+        expression: Box<Expression>,
+        arms: Vec<Expression>,
+        default: Option<Box<Expression>>,
     },
 }
 
@@ -180,9 +212,12 @@ impl Expression {
             ExpressionKind::FunctionCall { .. } => false,
             ExpressionKind::ArrayIndex { .. } => true,
             ExpressionKind::MemberAccess { .. } => true,
+            ExpressionKind::StaticAccess { .. } => false,
             ExpressionKind::Range { .. } => false,
             ExpressionKind::OptionUnwrap { .. } => false, //TODO can you assign to optional unwrap?
             ExpressionKind::Guard { .. } => false,
+            ExpressionKind::MatchArm { .. } => false,
+            ExpressionKind::Match { .. } => false,
         }
     }
 }
@@ -243,6 +278,107 @@ impl<'src> Parser<'src> {
                 Ok(Statement {
                     span: Span::from_to(struct_keyword.span, close_curly.span),
                     kind: StatementKind::Struct { identifier, fields },
+                })
+            }
+            TokenKind::EnumKeyword => {
+                let enum_keyword = self.expect(&TokenKind::EnumKeyword)?;
+                let identifier = self.expect_identifier()?;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut variants = Vec::new();
+                while self.peek().kind != TokenKind::CloseCurly {
+                    let variant = self.expect_identifier()?;
+                    variants.push(variant);
+
+                    if self.peek().kind != TokenKind::CloseCurly {
+                        self.expect(&TokenKind::Comma)?;
+                    }
+                }
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Statement {
+                    span: Span::from_to(enum_keyword.span, close_curly.span),
+                    kind: StatementKind::Enum {
+                        identifier,
+                        variants,
+                    },
+                })
+            }
+            TokenKind::ExternKeyword => {
+                let extern_keyword = self.expect(&TokenKind::ExternKeyword)?;
+                let identifier = self.expect_identifier()?;
+                self.expect(&TokenKind::OpenParen)?;
+
+                let mut parameters = Vec::new();
+                while self.peek().kind != TokenKind::CloseParen {
+                    parameters.push(self.parse_type_expression()?);
+
+                    if self.peek().kind != TokenKind::CloseParen {
+                        self.expect(&TokenKind::Comma)?;
+                    }
+                }
+                self.expect(&TokenKind::CloseParen)?;
+                self.expect(&TokenKind::Colon)?;
+
+                let return_type = self.parse_type_expression()?;
+                let semicolon = self.expect(&TokenKind::Semicolon)?;
+
+                Ok(Statement {
+                    span: Span::from_to(extern_keyword.span, semicolon.span),
+                    kind: StatementKind::ExternFunction {
+                        identifier,
+                        parameters,
+                        return_type,
+                    },
+                })
+            }
+            TokenKind::MatchKeyword => {
+                let match_keyword = self.expect(&TokenKind::MatchKeyword)?;
+                self.allow_struct_literals = false;
+                let expression = self.parse_expression()?;
+                self.allow_struct_literals = true;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut default = None;
+                let mut match_arms = Vec::new();
+                while self.peek().kind != TokenKind::CloseCurly {
+                    if self.peek().kind == TokenKind::ElseKeyword {
+                        let else_keyword = self.expect(&TokenKind::ElseKeyword)?;
+
+                        if default.is_some() {
+                            return Err(Diagnostic::new(
+                                "default case already defined in match".to_string(),
+                                else_keyword.span,
+                            ));
+                        }
+                        self.expect(&TokenKind::FatArrow)?;
+                        let body = self.parse_statement()?;
+
+                        default = Some(Box::new(body));
+                    } else {
+                        let pattern = self.parse_expression()?;
+                        self.expect(&TokenKind::FatArrow)?;
+                        let statement = self.parse_statement()?;
+
+                        match_arms.push(Statement {
+                            span: Span::from_to(pattern.span, statement.span),
+                            kind: StatementKind::MatchArm {
+                                pattern,
+                                body: Box::new(statement),
+                            },
+                        })
+                    }
+                }
+
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Statement {
+                    span: Span::from_to(match_keyword.span, close_curly.span),
+                    kind: StatementKind::Match {
+                        expression,
+                        arms: match_arms,
+                        default,
+                    },
                 })
             }
             TokenKind::Identifier(_) if self.context == ParseContext::Global => {
@@ -726,6 +862,57 @@ impl<'src> Parser<'src> {
                     },
                 })
             }
+            TokenKind::MatchKeyword => {
+                let match_keyword = self.expect(&TokenKind::MatchKeyword)?;
+                self.allow_struct_literals = false;
+                let expression = self.parse_expression()?;
+                self.allow_struct_literals = true;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut match_arms = Vec::new();
+                let mut default = None;
+                while self.peek().kind != TokenKind::CloseCurly {
+                    if self.peek().kind == TokenKind::ElseKeyword {
+                        let else_keyword = self.expect(&TokenKind::ElseKeyword)?;
+
+                        if default.is_some() {
+                            return Err(Diagnostic::new(
+                                "default case already defined in match".to_string(),
+                                else_keyword.span,
+                            ));
+                        }
+                        self.expect(&TokenKind::FatArrow)?;
+                        let value = self.parse_expression()?;
+                        self.expect(&TokenKind::Comma)?;
+
+                        default = Some(Box::new(value));
+                    } else {
+                        let pattern = self.parse_expression()?;
+                        self.expect(&TokenKind::FatArrow)?;
+                        let value = self.parse_expression()?;
+                        self.expect(&TokenKind::Comma)?;
+
+                        match_arms.push(Expression {
+                            span: Span::from_to(pattern.span, value.span),
+                            kind: ExpressionKind::MatchArm {
+                                pattern: Box::new(pattern),
+                                value: Box::new(value),
+                            },
+                        })
+                    }
+                }
+
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Expression {
+                    span: Span::from_to(match_keyword.span, close_curly.span),
+                    kind: ExpressionKind::Match {
+                        expression: Box::new(expression),
+                        arms: match_arms,
+                        default,
+                    },
+                })
+            }
             _ => {
                 self.lexer.next()?;
                 Err(Diagnostic {
@@ -738,7 +925,6 @@ impl<'src> Parser<'src> {
 
         loop {
             primary = match self.peek().kind {
-                //TODO: these two need to be applied after every expression recursively
                 TokenKind::OpenSquare => self.parse_array_index(primary)?,
                 TokenKind::Dot => {
                     self.expect(&TokenKind::Dot)?;
@@ -761,6 +947,18 @@ impl<'src> Parser<'src> {
                         kind: ExpressionKind::Range {
                             lower: Box::new(primary),
                             upper: Box::new(upper),
+                        },
+                    }
+                }
+                TokenKind::ColonColon => {
+                    self.expect(&TokenKind::ColonColon)?;
+                    let member = self.parse_expression()?;
+
+                    Expression {
+                        span: Span::from_to(primary.span, member.span),
+                        kind: ExpressionKind::StaticAccess {
+                            namespace: Box::new(primary),
+                            member: Box::new(member),
                         },
                     }
                 }
@@ -833,7 +1031,8 @@ impl<'src> Parser<'src> {
             BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
             BinaryOp::Add | BinaryOp::Sub => 4,
             BinaryOp::Lt | BinaryOp::Gt => 3,
-            BinaryOp::Assign => 1,
+            BinaryOp::Assign => 2,
+            BinaryOp::Eq => 1,
         }
     }
 
@@ -847,6 +1046,7 @@ impl<'src> Parser<'src> {
             TokenKind::OpenAngle => Some(BinaryOp::Lt),
             TokenKind::CloseAngle => Some(BinaryOp::Gt),
             TokenKind::Equals => Some(BinaryOp::Assign),
+            TokenKind::EqualsEquals => Some(BinaryOp::Eq),
             _ => None,
         }
     }
