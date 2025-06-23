@@ -1687,6 +1687,9 @@ impl<'src> TypeChecker<'src> {
 
                 let mut result_type = None;
                 let mut checked_arms = Vec::new();
+
+                let mut exhaustive;
+
                 for arm in arms {
                     let arm_span = arm.span;
                     let checked_arm = self.check_expr(arm)?;
@@ -1713,6 +1716,9 @@ impl<'src> TypeChecker<'src> {
                     checked_arms.push(checked_arm);
                 }
 
+                exhaustive =
+                    Self::check_match_exhaustiveness(&checked_expression.type_kind, &checked_arms);
+
                 let checked_default = if let Some(default_value) = default {
                     let default_span = default_value.span;
                     let checked_default = self.check_expr(*default_value)?;
@@ -1725,12 +1731,20 @@ impl<'src> TypeChecker<'src> {
                             default_span,
                         )?;
                     }
+
+                    exhaustive = true;
+
                     Some(Box::new(checked_default))
                 } else {
                     None
                 };
 
-                //TODO: exhaustiveness checking
+                if !exhaustive {
+                    return Err(Diagnostic::new(
+                        "match expression is not exhaustive".to_string(),
+                        expr.span,
+                    ));
+                }
 
                 if result_type.is_none() {
                     return Err(Diagnostic::new(
@@ -2095,5 +2109,12 @@ impl<'src> TypeChecker<'src> {
                 Ok(option_type)
             }
         }
+    }
+
+    fn check_match_exhaustiveness(type_kind: &TypeKind, arms: &[CheckedExpression]) -> bool {
+        if let TypeKind::Enum { variants, .. } = type_kind {
+            return variants.len() == arms.len();
+        }
+        false
     }
 }

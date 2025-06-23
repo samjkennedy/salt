@@ -10,7 +10,7 @@ main(): void {
     match c? {
         Colour::Red => println("Red!");
         Colour::Green => println("Green!");
-        else => println("Blue!");
+        Colour::Blue => println("Blue!");
     }
 
     s := match c? {
