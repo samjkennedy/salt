@@ -1,6 +1,5 @@
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Lexer, Span, Token, TokenKind};
-use crate::parser::StatementKind::MatchArm;
 
 #[derive(Debug, Clone)]
 pub enum StatementKind {
@@ -63,6 +62,7 @@ pub enum StatementKind {
     Match {
         expression: Expression,
         arms: Vec<Statement>,
+        default: Option<Box<Statement>>,
     },
     //TODO labels
     Continue,
@@ -144,6 +144,15 @@ pub enum ExpressionKind {
         expression: Box<Expression>,
         body: Box<Statement>,
     },
+    MatchArm {
+        pattern: Box<Expression>,
+        value: Box<Expression>,
+    },
+    Match {
+        expression: Box<Expression>,
+        arms: Vec<Expression>,
+        default: Option<Box<Expression>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +216,8 @@ impl Expression {
             ExpressionKind::Range { .. } => false,
             ExpressionKind::OptionUnwrap { .. } => false, //TODO can you assign to optional unwrap?
             ExpressionKind::Guard { .. } => false,
+            ExpressionKind::MatchArm { .. } => false,
+            ExpressionKind::Match { .. } => false,
         }
     }
 }
@@ -328,19 +339,35 @@ impl<'src> Parser<'src> {
                 self.allow_struct_literals = true;
                 self.expect(&TokenKind::OpenCurly)?;
 
+                let mut default = None;
                 let mut match_arms = Vec::new();
                 while self.peek().kind != TokenKind::CloseCurly {
-                    let pattern = self.parse_expression()?;
-                    self.expect(&TokenKind::FatArrow)?;
-                    let statement = self.parse_statement()?;
+                    if self.peek().kind == TokenKind::ElseKeyword {
+                        let else_keyword = self.expect(&TokenKind::ElseKeyword)?;
 
-                    match_arms.push(Statement {
-                        span: Span::from_to(pattern.span, statement.span),
-                        kind: MatchArm {
-                            pattern,
-                            body: Box::new(statement),
-                        },
-                    })
+                        if default.is_some() {
+                            return Err(Diagnostic::new(
+                                "default case already defined in match".to_string(),
+                                else_keyword.span,
+                            ));
+                        }
+                        self.expect(&TokenKind::FatArrow)?;
+                        let body = self.parse_statement()?;
+
+                        default = Some(Box::new(body));
+                    } else {
+                        let pattern = self.parse_expression()?;
+                        self.expect(&TokenKind::FatArrow)?;
+                        let statement = self.parse_statement()?;
+
+                        match_arms.push(Statement {
+                            span: Span::from_to(pattern.span, statement.span),
+                            kind: StatementKind::MatchArm {
+                                pattern,
+                                body: Box::new(statement),
+                            },
+                        })
+                    }
                 }
 
                 let close_curly = self.expect(&TokenKind::CloseCurly)?;
@@ -350,6 +377,7 @@ impl<'src> Parser<'src> {
                     kind: StatementKind::Match {
                         expression,
                         arms: match_arms,
+                        default,
                     },
                 })
             }
@@ -831,6 +859,57 @@ impl<'src> Parser<'src> {
                     kind: ExpressionKind::Guard {
                         expression: Box::new(expression),
                         body: Box::new(body),
+                    },
+                })
+            }
+            TokenKind::MatchKeyword => {
+                let match_keyword = self.expect(&TokenKind::MatchKeyword)?;
+                self.allow_struct_literals = false;
+                let expression = self.parse_expression()?;
+                self.allow_struct_literals = true;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut match_arms = Vec::new();
+                let mut default = None;
+                while self.peek().kind != TokenKind::CloseCurly {
+                    if self.peek().kind == TokenKind::ElseKeyword {
+                        let else_keyword = self.expect(&TokenKind::ElseKeyword)?;
+
+                        if default.is_some() {
+                            return Err(Diagnostic::new(
+                                "default case already defined in match".to_string(),
+                                else_keyword.span,
+                            ));
+                        }
+                        self.expect(&TokenKind::FatArrow)?;
+                        let value = self.parse_expression()?;
+                        self.expect(&TokenKind::Comma)?;
+
+                        default = Some(Box::new(value));
+                    } else {
+                        let pattern = self.parse_expression()?;
+                        self.expect(&TokenKind::FatArrow)?;
+                        let value = self.parse_expression()?;
+                        self.expect(&TokenKind::Comma)?;
+
+                        match_arms.push(Expression {
+                            span: Span::from_to(pattern.span, value.span),
+                            kind: ExpressionKind::MatchArm {
+                                pattern: Box::new(pattern),
+                                value: Box::new(value),
+                            },
+                        })
+                    }
+                }
+
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Expression {
+                    span: Span::from_to(match_keyword.span, close_curly.span),
+                    kind: ExpressionKind::Match {
+                        expression: Box::new(expression),
+                        arms: match_arms,
+                        default,
                     },
                 })
             }

@@ -22,7 +22,7 @@ pub enum CheckedStatement {
     VariableDeclaration {
         type_kind: TypeKind,
         name: String,
-        initialiser: CheckedExpression,
+        initialiser: Option<CheckedExpression>,
     },
     While {
         condition: CheckedExpression,
@@ -67,6 +67,7 @@ pub enum CheckedStatement {
     Match {
         expression: CheckedExpression,
         arms: Vec<CheckedStatement>,
+        default: Option<Box<CheckedStatement>>,
     },
 }
 
@@ -216,6 +217,8 @@ impl CheckedExpression {
             CheckedExpressionKind::Guard { .. } => false,
             CheckedExpressionKind::Some(_) => false,
             CheckedExpressionKind::None(_) => false,
+            CheckedExpressionKind::MatchArm { .. } => false,
+            CheckedExpressionKind::Match { .. } => false,
         }
     }
 }
@@ -274,6 +277,15 @@ pub enum CheckedExpressionKind {
     },
     Some(Box<CheckedExpression>),
     None(TypeKind),
+    MatchArm {
+        pattern: Box<CheckedExpression>,
+        value: Box<CheckedExpression>,
+    },
+    Match {
+        expression: Box<CheckedExpression>,
+        arms: Vec<CheckedExpression>,
+        default: Option<Box<CheckedExpression>>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -817,7 +829,11 @@ impl<'src> TypeChecker<'src> {
                     body: Box::new(checked_body),
                 })
             }
-            StatementKind::Match { expression, arms } => {
+            StatementKind::Match {
+                expression,
+                arms,
+                default,
+            } => {
                 let expression_span = expression.span;
                 let checked_expression = self.check_expr(expression)?;
 
@@ -848,9 +864,15 @@ impl<'src> TypeChecker<'src> {
                     checked_arms.push(self.check_statement(arm, false)?);
                 }
 
+                let checked_default = match default {
+                    Some(default) => Some(Box::new(self.check_statement(*default, in_loop)?)),
+                    None => None,
+                };
+
                 Ok(CheckedStatement::Match {
                     expression: checked_expression,
                     arms: checked_arms,
+                    default: checked_default,
                 })
             }
         }
@@ -1103,7 +1125,7 @@ impl<'src> TypeChecker<'src> {
         Ok(CheckedStatement::VariableDeclaration {
             type_kind,
             name: variable_name,
-            initialiser: checked_initialiser,
+            initialiser: Some(checked_initialiser),
         })
     }
 
@@ -1117,12 +1139,18 @@ impl<'src> TypeChecker<'src> {
                 kind: CheckedExpressionKind::IntLiteral(value),
                 type_kind: TypeKind::I64,
             }),
-            ExpressionKind::StringLiteral(value) => Ok(CheckedExpression {
-                kind: CheckedExpressionKind::StringLiteral(value),
-                type_kind: TypeKind::Slice {
+            ExpressionKind::StringLiteral(value) => {
+                let slice_char_type = TypeKind::Slice {
                     element_type: Box::new(TypeKind::Char),
-                },
-            }),
+                };
+                self.module.add_type(&slice_char_type);
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::StringLiteral(value),
+                    type_kind: TypeKind::Slice {
+                        element_type: Box::new(TypeKind::Char),
+                    },
+                })
+            }
             ExpressionKind::Parenthesized(expr) => {
                 let checked_expr = self.check_expr(*expr)?;
                 Ok(CheckedExpression {
@@ -1638,6 +1666,88 @@ impl<'src> TypeChecker<'src> {
                     expr.span,
                 )),
             },
+            ExpressionKind::MatchArm { pattern, value } => {
+                let checked_pattern = self.check_expr(*pattern)?;
+                let checked_value = self.check_expr(*value)?;
+
+                Ok(CheckedExpression {
+                    type_kind: checked_value.type_kind.clone(),
+                    kind: CheckedExpressionKind::MatchArm {
+                        pattern: Box::new(checked_pattern),
+                        value: Box::new(checked_value),
+                    },
+                })
+            }
+            ExpressionKind::Match {
+                expression,
+                arms,
+                default,
+            } => {
+                let checked_expression = self.check_expr(*expression)?;
+
+                let mut result_type = None;
+                let mut checked_arms = Vec::new();
+                for arm in arms {
+                    let arm_span = arm.span;
+                    let checked_arm = self.check_expr(arm)?;
+
+                    if let CheckedExpressionKind::MatchArm { pattern, .. } = &checked_arm.kind {
+                        Self::expect_type(
+                            &checked_expression.type_kind,
+                            &pattern.type_kind,
+                            arm_span,
+                        )?;
+                    } else {
+                        unreachable!()
+                    }
+
+                    if result_type.is_none() {
+                        result_type = Some(checked_arm.type_kind.clone());
+                    } else {
+                        Self::expect_type(
+                            &result_type.clone().unwrap(),
+                            &checked_arm.type_kind,
+                            arm_span,
+                        )?;
+                    }
+                    checked_arms.push(checked_arm);
+                }
+
+                let checked_default = if let Some(default_value) = default {
+                    let default_span = default_value.span;
+                    let checked_default = self.check_expr(*default_value)?;
+                    if result_type.is_none() {
+                        result_type = Some(checked_default.type_kind.clone());
+                    } else {
+                        Self::expect_type(
+                            &result_type.clone().unwrap(),
+                            &checked_default.type_kind,
+                            default_span,
+                        )?;
+                    }
+                    Some(Box::new(checked_default))
+                } else {
+                    None
+                };
+
+                //TODO: exhaustiveness checking
+
+                if result_type.is_none() {
+                    return Err(Diagnostic::new(
+                        "could not determine return type of match expression".to_string(),
+                        expr.span,
+                    ));
+                }
+
+                Ok(CheckedExpression {
+                    kind: CheckedExpressionKind::Match {
+                        expression: Box::new(checked_expression),
+                        arms: checked_arms,
+                        default: checked_default,
+                    },
+                    type_kind: result_type.unwrap(),
+                })
+            }
         }
     }
 

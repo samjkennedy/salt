@@ -118,74 +118,82 @@ impl Emitter {
                 initialiser,
             } => {
                 self.emit_var_decl_type(type_kind, name)?;
-                if let TypeKind::Slice { .. } = type_kind {
-                    if let CheckedExpressionKind::ArrayIndex { .. } = &initialiser.kind {
+                if let Some(initialiser) = initialiser {
+                    if let TypeKind::Slice { .. } = type_kind {
+                        if let CheckedExpressionKind::ArrayIndex { .. } = &initialiser.kind {
+                            write!(self.output, " = ")?;
+                            self.emit_expr(initialiser)?;
+                            writeln!(self.output, ";")?;
+                            return Ok(());
+                        }
+
+                        writeln!(self.output, ";")?;
+                        write!(self.output, "{}.data = ", name)?;
+
+                        //TODO: This is a mess and should be done at a rewriter stage
+                        match &initialiser.kind {
+                            CheckedExpressionKind::Unary {
+                                operator: CheckedUnaryOp::Ref { .. },
+                                operand,
+                            } => {
+                                write!(self.output, "&")?;
+                                self.emit_expr(operand)?;
+                                writeln!(self.output, "[0];")?;
+                                if let TypeKind::Array { size, .. } = operand.type_kind {
+                                    writeln!(self.output, "{}.len = {};", name, size)
+                                } else {
+                                    unreachable!()
+                                }
+                            }
+                            CheckedExpressionKind::ArraySlice { array, range } => {
+                                if let CheckedExpressionKind::Range { lower, upper } = &range.kind {
+                                    if let TypeKind::Slice { .. } = &array.type_kind {
+                                        write!(self.output, "&")?;
+                                        self.emit_expr(array)?;
+                                        write!(self.output, ".data")?;
+                                        write!(self.output, "[")?;
+                                        self.emit_expr(lower)?;
+                                        writeln!(self.output, "];")?;
+                                        write!(self.output, "{}.len = ", name)?;
+                                        self.emit_expr(upper)?;
+                                        write!(self.output, " - ")?;
+                                        self.emit_expr(lower)?;
+                                        writeln!(self.output, ";")
+                                    } else {
+                                        write!(self.output, "&")?;
+                                        //start pointer
+                                        self.emit_expr(array)?;
+                                        write!(self.output, "[")?;
+                                        self.emit_expr(lower)?;
+                                        writeln!(self.output, "];")?;
+
+                                        //len
+                                        write!(self.output, "{}.len = ", name)?;
+                                        self.emit_expr(upper)?;
+                                        write!(self.output, " - ")?;
+                                        self.emit_expr(lower)?;
+                                        writeln!(self.output, ";")
+                                    }
+                                } else {
+                                    unreachable!()
+                                }
+                            }
+                            CheckedExpressionKind::StringLiteral(value) => {
+                                writeln!(self.output, "\"{}\";", value)?;
+                                writeln!(self.output, "{}.len = {};", name, value.len())
+                            }
+                            CheckedExpressionKind::Variable { name: var_name, .. } => {
+                                writeln!(self.output, "{}.data;", var_name)?;
+                                writeln!(self.output, "{}.len = {}.len;", name, var_name)
+                            }
+                            _ => todo!("initialising slices with {:?}", initialiser.kind),
+                        }
+                    } else {
                         write!(self.output, " = ")?;
                         self.emit_expr(initialiser)?;
-                        writeln!(self.output, ";")?;
-                        return Ok(());
-                    }
-
-                    writeln!(self.output, ";")?;
-                    write!(self.output, "{}.data = ", name)?;
-
-                    //TODO: This is a mess and should be done at a rewriter stage
-                    match &initialiser.kind {
-                        CheckedExpressionKind::Unary {
-                            operator: CheckedUnaryOp::Ref { .. },
-                            operand,
-                        } => {
-                            write!(self.output, "&")?;
-                            self.emit_expr(operand)?;
-                            writeln!(self.output, "[0];")?;
-                            if let TypeKind::Array { size, .. } = operand.type_kind {
-                                writeln!(self.output, "{}.len = {};", name, size)
-                            } else {
-                                unreachable!()
-                            }
-                        }
-                        CheckedExpressionKind::ArraySlice { array, range } => {
-                            if let CheckedExpressionKind::Range { lower, upper } = &range.kind {
-                                if let TypeKind::Slice { .. } = &array.type_kind {
-                                    write!(self.output, "&")?;
-                                    self.emit_expr(array)?;
-                                    write!(self.output, ".data")?;
-                                    write!(self.output, "[")?;
-                                    self.emit_expr(lower)?;
-                                    writeln!(self.output, "];")?;
-                                    write!(self.output, "{}.len = ", name)?;
-                                    self.emit_expr(upper)?;
-                                    write!(self.output, " - ")?;
-                                    self.emit_expr(lower)?;
-                                    writeln!(self.output, ";")
-                                } else {
-                                    write!(self.output, "&")?;
-                                    //start pointer
-                                    self.emit_expr(array)?;
-                                    write!(self.output, "[")?;
-                                    self.emit_expr(lower)?;
-                                    writeln!(self.output, "];")?;
-
-                                    //len
-                                    write!(self.output, "{}.len = ", name)?;
-                                    self.emit_expr(upper)?;
-                                    write!(self.output, " - ")?;
-                                    self.emit_expr(lower)?;
-                                    writeln!(self.output, ";")
-                                }
-                            } else {
-                                unreachable!()
-                            }
-                        }
-                        CheckedExpressionKind::StringLiteral(value) => {
-                            writeln!(self.output, "\"{}\";", value)?;
-                            writeln!(self.output, "{}.len = {};", name, value.len())
-                        }
-                        _ => todo!("initialising slices with {:?}", initialiser.kind),
+                        writeln!(self.output, ";")
                     }
                 } else {
-                    write!(self.output, " = ")?;
-                    self.emit_expr(initialiser)?;
                     writeln!(self.output, ";")
                 }
             }
@@ -255,13 +263,22 @@ impl Emitter {
                 self.emit_statement(body)?;
                 writeln!(self.output, "break;")
             }
-            CheckedStatement::Match { expression, arms } => {
+            CheckedStatement::Match {
+                expression,
+                arms,
+                default,
+            } => {
                 write!(self.output, "switch (")?;
                 self.emit_expr(expression)?;
                 writeln!(self.output, ") {{")?;
 
                 for arm in arms {
                     self.emit_statement(arm)?;
+                }
+                if let Some(default) = default {
+                    writeln!(self.output, "default:")?;
+                    self.emit_statement(default)?;
+                    writeln!(self.output, "break;")?;
                 }
                 writeln!(self.output, "}}")
             }
@@ -554,6 +571,12 @@ impl Emitter {
                 write!(self.output, "(Option_")?;
                 self.emit_type(reference_type)?;
                 write!(self.output, ") {{  .has_value = false }}")
+            }
+            CheckedExpressionKind::MatchArm { .. } => {
+                unreachable!("should be removed by the rewriting step")
+            }
+            CheckedExpressionKind::Match { .. } => {
+                unreachable!("should be removed by the rewriting step")
             }
         }
     }
