@@ -14,13 +14,13 @@ foo(): ?i64 {
 main(): void {
     x := foo()?;
 
-    print(x);
+    println(x);
 
     i := 0;
     while i < 20 {
-        print(i);
+        println(i);
         m := maybe(i)?;
-        print(m);
+        println(m);
 
         i = i + 1;
     }

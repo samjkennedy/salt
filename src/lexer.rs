@@ -43,6 +43,8 @@ pub enum TokenKind {
     GuardKeyword,
     EnumKeyword,
     ExternKeyword,
+    MatchKeyword,
+    FatArrow,
     EndOfFile,
 }
 
@@ -94,6 +96,9 @@ impl<'src> Lexer<'src> {
                     if let Some('=') = self.peek() {
                         self.cursor -= 1;
                         Ok(self.make_token(TokenKind::EqualsEquals, "==".to_owned()))
+                    } else if let Some('>') = self.peek() {
+                        self.cursor -= 1;
+                        Ok(self.make_token(TokenKind::FatArrow, "=>".to_owned()))
                     } else {
                         self.cursor -= 1;
                         Ok(self.make_token(TokenKind::Equals, "=".to_owned()))
@@ -333,6 +338,11 @@ impl<'src> Lexer<'src> {
             },
             "extern" => Token {
                 kind: TokenKind::ExternKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "match" => Token {
+                kind: TokenKind::MatchKeyword,
                 span,
                 text: value.to_owned(),
             },

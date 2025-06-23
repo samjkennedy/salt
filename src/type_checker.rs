@@ -60,6 +60,14 @@ pub enum CheckedStatement {
     },
     Continue,
     Break,
+    MatchArm {
+        pattern: CheckedExpression,
+        body: Box<CheckedStatement>,
+    },
+    Match {
+        expression: CheckedExpression,
+        arms: Vec<CheckedStatement>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -206,6 +214,8 @@ impl CheckedExpression {
             CheckedExpressionKind::ArraySlice { .. } => false,
             CheckedExpressionKind::OptionUnwrap { .. } => false,
             CheckedExpressionKind::Guard { .. } => false,
+            CheckedExpressionKind::Some(_) => false,
+            CheckedExpressionKind::None(_) => false,
         }
     }
 }
@@ -262,6 +272,8 @@ pub enum CheckedExpressionKind {
         expression: Box<CheckedExpression>,
         body: Box<CheckedStatement>,
     },
+    Some(Box<CheckedExpression>),
+    None(TypeKind),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -796,6 +808,51 @@ impl<'src> TypeChecker<'src> {
                     return_type: checked_return_type,
                 })
             }
+            StatementKind::MatchArm { pattern, body } => {
+                let checked_pattern = self.check_expr(pattern)?;
+                let checked_body = self.check_statement(*body, in_loop)?;
+
+                Ok(CheckedStatement::MatchArm {
+                    pattern: checked_pattern,
+                    body: Box::new(checked_body),
+                })
+            }
+            StatementKind::Match { expression, arms } => {
+                let expression_span = expression.span;
+                let checked_expression = self.check_expr(expression)?;
+
+                match &checked_expression.type_kind {
+                    TypeKind::Enum { .. } => { /*can be matched*/ }
+                    _ => {
+                        match Self::expect_type(
+                            &TypeKind::I64,
+                            &checked_expression.type_kind,
+                            expression_span,
+                        ) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                return Err(Diagnostic::new(
+                                    format!(
+                                        "type `{}` is not a valid match target",
+                                        checked_expression.type_kind
+                                    ),
+                                    expression_span,
+                                ))
+                            }
+                        }
+                    }
+                }
+
+                let mut checked_arms = Vec::new();
+                for arm in arms {
+                    checked_arms.push(self.check_statement(arm, false)?);
+                }
+
+                Ok(CheckedStatement::Match {
+                    expression: checked_expression,
+                    arms: checked_arms,
+                })
+            }
         }
     }
 
@@ -968,6 +1025,8 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Return { .. } => true,
             CheckedStatement::Continue => false,
             CheckedStatement::Break => false,
+            CheckedStatement::MatchArm { body, .. } => Self::all_branches_return(body),
+            CheckedStatement::Match { arms, .. } => arms.iter().all(Self::all_branches_return),
         }
     }
 
@@ -1006,6 +1065,8 @@ impl<'src> TypeChecker<'src> {
             CheckedStatement::Return { .. } => true,
             CheckedStatement::Continue => true,
             CheckedStatement::Break => true,
+            CheckedStatement::MatchArm { body, .. } => Self::all_branches_exit_scope(body),
+            CheckedStatement::Match { arms, .. } => arms.iter().all(Self::all_branches_exit_scope),
         }
     }
 
@@ -1446,6 +1507,7 @@ impl<'src> TypeChecker<'src> {
                 let checked_expression = self.check_expr(*expression)?;
 
                 match &checked_expression.type_kind {
+                    //TODO: Consider a different operation for pointers that doesn't unwrap them, `^`
                     TypeKind::Option { reference_type } | TypeKind::Pointer { reference_type } => {
                         match self.get_return_context() {
                             TypeKind::Void | TypeKind::Option { .. } => {

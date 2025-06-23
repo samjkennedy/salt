@@ -179,29 +179,27 @@ impl Rewriter {
 
                     //TODO: This should get handled by rewrite_expression by passing in an assign context rather than the return context
                     //      Or if instead allow explicit some like `return ?10;`
-                    let return_statement =
-                        if let TypeKind::Option { reference_type } = return_context {
-                            CheckedStatement::Return {
-                                expression: Some(Self::some_optional_expression(
-                                    rewritten_expression,
-                                    return_context,
-                                    reference_type,
-                                )),
-                            }
-                        } else {
-                            CheckedStatement::Return {
-                                expression: Some(rewritten_expression),
-                            }
-                        };
+                    let return_statement = if let TypeKind::Option { .. } = &return_context {
+                        CheckedStatement::Return {
+                            expression: Some(CheckedExpression {
+                                kind: CheckedExpressionKind::Some(Box::new(rewritten_expression)),
+                                type_kind: return_context.clone(),
+                            }),
+                        }
+                    } else {
+                        CheckedStatement::Return {
+                            expression: Some(rewritten_expression),
+                        }
+                    };
                     prep_stmts.push(return_statement);
 
                     prep_stmts
-                } else if let TypeKind::Option { reference_type } = return_context {
+                } else if let TypeKind::Option { reference_type } = &return_context {
                     vec![CheckedStatement::Return {
-                        expression: Some(Self::none_optional_expression(
-                            return_context,
-                            reference_type,
-                        )),
+                        expression: Some(CheckedExpression {
+                            type_kind: return_context.clone(),
+                            kind: CheckedExpressionKind::None(*reference_type.clone()),
+                        }),
                     }]
                 } else {
                     vec![CheckedStatement::Return { expression: None }]
@@ -474,6 +472,46 @@ impl Rewriter {
                     _ => unreachable!(),
                 }
             }
+            // CheckedStatement::MatchArm { .. } => vec![statement],
+            // CheckedStatement::Match { .. } => vec![statement],
+            //TODO: figure this out later...
+            CheckedStatement::MatchArm { pattern, body } => {
+                let mut prep_stmts = Vec::new();
+                let (stmts, rewritten_pattern) = self.rewrite_expression(&pattern, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+                let stmts = self.rewrite_statement(*body, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+
+                vec![CheckedStatement::MatchArm {
+                    pattern: rewritten_pattern,
+                    body: Box::new(CheckedStatement::Block(prep_stmts)),
+                }]
+            }
+            CheckedStatement::Match { expression, arms } => {
+                let mut prep_stmts = Vec::new();
+                let (stmts, rewritten_expression) =
+                    self.rewrite_expression(&expression, return_context);
+                for stmt in stmts {
+                    prep_stmts.push(stmt);
+                }
+
+                let mut rewritten_arms = Vec::new();
+                for arm in arms {
+                    let rewritten_arm = self.rewrite_statement(arm, return_context);
+                    rewritten_arms.push(CheckedStatement::Block(rewritten_arm));
+                }
+
+                prep_stmts.push(CheckedStatement::Match {
+                    expression: rewritten_expression,
+                    arms: rewritten_arms,
+                });
+
+                prep_stmts
+            }
         }
     }
 
@@ -510,10 +548,10 @@ impl Rewriter {
                             TypeKind::Option {
                                 reference_type: return_ref_type,
                             } => CheckedStatement::Return {
-                                expression: Some(Self::none_optional_expression(
-                                    return_context,
-                                    return_ref_type,
-                                )),
+                                expression: Some(CheckedExpression {
+                                    type_kind: return_context.clone(),
+                                    kind: CheckedExpressionKind::None(*return_ref_type.clone()),
+                                }),
                             },
                             _ => unreachable!(),
                         };
@@ -566,10 +604,10 @@ impl Rewriter {
                             TypeKind::Option {
                                 reference_type: return_ref_type,
                             } => CheckedStatement::Return {
-                                expression: Some(Self::none_optional_expression(
-                                    return_context,
-                                    return_ref_type,
-                                )),
+                                expression: Some(CheckedExpression {
+                                    type_kind: return_context.clone(),
+                                    kind: CheckedExpressionKind::None(*return_ref_type.clone()),
+                                }),
                             },
                             _ => unreachable!(),
                         };
@@ -928,56 +966,19 @@ impl Rewriter {
                     _ => unreachable!(),
                 }
             }
-        }
-    }
+            CheckedExpressionKind::Some(expression) => {
+                let (prep_stmts, rewritten_expression) =
+                    self.rewrite_expression(expression, return_context);
 
-    fn none_optional_expression(
-        return_context: &TypeKind,
-        return_ref_type: &TypeKind,
-    ) -> CheckedExpression {
-        CheckedExpression {
-            kind: CheckedExpressionKind::StructLiteral {
-                name: format!("Option_{}", return_ref_type),
-                fields: vec![(
-                    "has_value".to_string(),
+                (
+                    prep_stmts,
                     CheckedExpression {
-                        kind: CheckedExpressionKind::BoolLiteral(false),
-                        type_kind: TypeKind::Bool,
+                        kind: CheckedExpressionKind::Some(Box::new(rewritten_expression)),
+                        type_kind: expr.type_kind.clone(),
                     },
-                )],
-                struct_type: TypeKind::Struct {
-                    name: format!("Option_{}", return_ref_type),
-                    fields: vec![],
-                },
-            },
-            type_kind: return_context.clone(),
-        }
-    }
-
-    fn some_optional_expression(
-        expression: CheckedExpression,
-        return_context: &TypeKind,
-        return_ref_type: &TypeKind,
-    ) -> CheckedExpression {
-        CheckedExpression {
-            kind: CheckedExpressionKind::StructLiteral {
-                name: format!("Option_{}", return_ref_type),
-                fields: vec![
-                    (
-                        "has_value".to_string(),
-                        CheckedExpression {
-                            kind: CheckedExpressionKind::BoolLiteral(true),
-                            type_kind: TypeKind::Bool,
-                        },
-                    ),
-                    ("value".to_string(), expression),
-                ],
-                struct_type: TypeKind::Struct {
-                    name: format!("Option_{}", return_ref_type),
-                    fields: vec![],
-                },
-            },
-            type_kind: return_context.clone(),
+                )
+            }
+            CheckedExpressionKind::None(_) => (vec![], expr.clone()),
         }
     }
 }

@@ -1,7 +1,7 @@
 main(): void {
-    print(4 + 5);
-    print(6 * 7);
-    print(6 + 7 * 2);
-    print(6 + 7 / 2);
-    print(15 % 3 + 1);
+    println(4 + 5);
+    println(6 * 7);
+    println(6 + 7 * 2);
+    println(6 + 7 / 2);
+    println(15 % 3 + 1);
 }

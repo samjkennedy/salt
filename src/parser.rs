@@ -1,5 +1,6 @@
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Lexer, Span, Token, TokenKind};
+use crate::parser::StatementKind::MatchArm;
 
 #[derive(Debug, Clone)]
 pub enum StatementKind {
@@ -54,6 +55,14 @@ pub enum StatementKind {
         identifier: Token,
         parameters: Vec<TypeExpression>,
         return_type: TypeExpression,
+    },
+    MatchArm {
+        pattern: Expression,
+        body: Box<Statement>,
+    },
+    Match {
+        expression: Expression,
+        arms: Vec<Statement>,
     },
     //TODO labels
     Continue,
@@ -309,6 +318,38 @@ impl<'src> Parser<'src> {
                         identifier,
                         parameters,
                         return_type,
+                    },
+                })
+            }
+            TokenKind::MatchKeyword => {
+                let match_keyword = self.expect(&TokenKind::MatchKeyword)?;
+                self.allow_struct_literals = false;
+                let expression = self.parse_expression()?;
+                self.allow_struct_literals = true;
+                self.expect(&TokenKind::OpenCurly)?;
+
+                let mut match_arms = Vec::new();
+                while self.peek().kind != TokenKind::CloseCurly {
+                    let pattern = self.parse_expression()?;
+                    self.expect(&TokenKind::FatArrow)?;
+                    let statement = self.parse_statement()?;
+
+                    match_arms.push(Statement {
+                        span: Span::from_to(pattern.span, statement.span),
+                        kind: MatchArm {
+                            pattern,
+                            body: Box::new(statement),
+                        },
+                    })
+                }
+
+                let close_curly = self.expect(&TokenKind::CloseCurly)?;
+
+                Ok(Statement {
+                    span: Span::from_to(match_keyword.span, close_curly.span),
+                    kind: StatementKind::Match {
+                        expression,
+                        arms: match_arms,
                     },
                 })
             }

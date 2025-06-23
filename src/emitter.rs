@@ -247,6 +247,24 @@ impl Emitter {
             CheckedStatement::For { .. } => unreachable!("should have been rewritten"),
             CheckedStatement::Guard { .. } => unreachable!("should have been rewritten"),
             CheckedStatement::ExternFunction { .. } => Ok(()), //TODO: find and import the function
+            CheckedStatement::MatchArm { pattern, body } => {
+                write!(self.output, "case ")?;
+                self.emit_expr(pattern)?;
+                writeln!(self.output, ":")?;
+
+                self.emit_statement(body)?;
+                writeln!(self.output, "break;")
+            }
+            CheckedStatement::Match { expression, arms } => {
+                write!(self.output, "switch (")?;
+                self.emit_expr(expression)?;
+                writeln!(self.output, ") {{")?;
+
+                for arm in arms {
+                    self.emit_statement(arm)?;
+                }
+                writeln!(self.output, "}}")
+            }
         }
     }
 
@@ -306,7 +324,8 @@ impl Emitter {
             }
             TypeKind::Struct { name, .. } => write!(self.output, "{}", name)?,
             TypeKind::Option { reference_type } => {
-                write!(self.output, "Option_{}", reference_type)?
+                write!(self.output, "Option_")?;
+                self.emit_type(reference_type)?;
             }
             TypeKind::Slice { element_type } => {
                 write!(self.output, "Slice_")?;
@@ -346,7 +365,7 @@ impl Emitter {
                 write!(self.output, " {}", name)?
             }
             TypeKind::Option { reference_type } => {
-                write!(self.output, "Slice_")?;
+                write!(self.output, "Option_")?;
                 self.emit_type(reference_type)?;
                 write!(self.output, " {}", name)?
             }
@@ -473,6 +492,7 @@ impl Emitter {
             } => {
                 //(<name>){<field1>=<expr1>,...}
                 if let TypeKind::Struct { name, .. } = struct_type {
+                    println!("{}", name);
                     write!(self.output, "({}) {{", name)?;
                     for (i, (field_name, field_arg)) in fields.iter().enumerate() {
                         write!(self.output, ".{} = ", field_name)?;
@@ -523,8 +543,85 @@ impl Emitter {
             CheckedExpressionKind::OptionUnwrap { .. } | CheckedExpressionKind::Guard { .. } => {
                 unreachable!("should have been removed in the rewriting step")
             }
+            CheckedExpressionKind::Some(expression) => {
+                write!(self.output, "(Option_")?;
+                self.emit_type(&expression.type_kind)?;
+                write!(self.output, ") {{  .has_value = true, .value = ")?;
+                self.emit_expr(expression)?;
+                write!(self.output, " }}")
+            }
+            CheckedExpressionKind::None(reference_type) => {
+                write!(self.output, "(Option_")?;
+                self.emit_type(reference_type)?;
+                write!(self.output, ") {{  .has_value = false }}")
+            }
         }
     }
+
+    // fn none_optional_expression(
+    //     return_context: &TypeKind,
+    //     return_ref_type: &TypeKind,
+    // ) -> CheckedExpression {
+    //     CheckedExpression {
+    //         kind: CheckedExpressionKind::StructLiteral {
+    //             name: format!(
+    //                 "Option_{}",
+    //                 if let TypeKind::Enum { tag, .. } = return_ref_type {
+    //                     tag
+    //                 } else {
+    //                     return_ref_type
+    //                 }
+    //             ),
+    //             fields: vec![(
+    //                 "has_value".to_string(),
+    //                 CheckedExpression {
+    //                     kind: CheckedExpressionKind::BoolLiteral(false),
+    //                     type_kind: TypeKind::Bool,
+    //                 },
+    //             )],
+    //             struct_type: TypeKind::Struct {
+    //                 name: format!(
+    //                     "Option_{}",
+    //                     if let TypeKind::Enum { tag, .. } = return_ref_type {
+    //                         tag
+    //                     } else {
+    //                         return_ref_type
+    //                     }
+    //                 ),
+    //                 fields: vec![],
+    //             },
+    //         },
+    //         type_kind: return_context.clone(),
+    //     }
+    // }
+    //
+    // fn some_optional_expression(
+    //     expression: CheckedExpression,
+    //     return_context: &TypeKind,
+    //     return_ref_type: &TypeKind,
+    // ) -> CheckedExpression {
+    //     CheckedExpression {
+    //         //TODO this breaks if the emitter generates a different type name...
+    //         kind: CheckedExpressionKind::StructLiteral {
+    //             name: format!("Option_{}", return_ref_type),
+    //             fields: vec![
+    //                 (
+    //                     "has_value".to_string(),
+    //                     CheckedExpression {
+    //                         kind: CheckedExpressionKind::BoolLiteral(true),
+    //                         type_kind: TypeKind::Bool,
+    //                     },
+    //                 ),
+    //                 ("value".to_string(), expression),
+    //             ],
+    //             struct_type: TypeKind::Struct {
+    //                 name: format!("Option_{}", return_ref_type),
+    //                 fields: vec![],
+    //             },
+    //         },
+    //         type_kind: return_context.clone(),
+    //     }
+    // }
 
     fn emit_print_format(
         &mut self,
