@@ -85,6 +85,8 @@ pub enum TypeKind {
     I16,
     I32,
     I64,
+    Usize,
+    Isize,
     F32,
     F64,
     // String, TODO save this for CString
@@ -223,17 +225,20 @@ impl TypeKind {
 
     fn is_integer(ty: &TypeKind) -> bool {
         use TypeKind::*;
-        matches!(ty, U8 | U16 | U32 | U64 | I8 | I16 | I32 | I64)
+        matches!(
+            ty,
+            U8 | U16 | U32 | U64 | I8 | I16 | I32 | I64 | Usize | Isize
+        )
     }
 
     fn is_unsigned(ty: &TypeKind) -> bool {
         use TypeKind::*;
-        matches!(ty, U8 | U16 | U32 | U64)
+        matches!(ty, U8 | U16 | U32 | U64 | Usize)
     }
 
     fn is_signed(ty: &TypeKind) -> bool {
         use TypeKind::*;
-        matches!(ty, I8 | I16 | I32 | I64)
+        matches!(ty, I8 | I16 | I32 | I64 | Isize)
     }
 
     fn is_float(ty: &TypeKind) -> bool {
@@ -257,6 +262,8 @@ impl Display for TypeKind {
             TypeKind::I16 => write!(f, "i16"),
             TypeKind::I32 => write!(f, "i32"),
             TypeKind::I64 => write!(f, "i64"),
+            TypeKind::Usize => write!(f, "usize"),
+            TypeKind::Isize => write!(f, "isize"),
             TypeKind::F32 => write!(f, "f32"),
             TypeKind::F64 => write!(f, "f64"),
             TypeKind::Array { size, element_type } => {
@@ -309,6 +316,7 @@ impl CheckedBinaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckedUnaryOp {
     Not { result: TypeKind },
+    Neg { result: TypeKind },
     Mut { result: TypeKind },
     Ref { result: TypeKind },
     Deref { result: TypeKind },
@@ -317,7 +325,8 @@ pub enum CheckedUnaryOp {
 impl CheckedUnaryOp {
     fn get_result_type(&self) -> TypeKind {
         match self {
-            CheckedUnaryOp::Not { result } => result.clone(),
+            CheckedUnaryOp::Not { .. } => TypeKind::Bool,
+            CheckedUnaryOp::Neg { result } => result.clone(),
             CheckedUnaryOp::Mut { result } => result.clone(),
             CheckedUnaryOp::Ref { result } => result.clone(),
             CheckedUnaryOp::Deref { result } => result.clone(),
@@ -1374,7 +1383,14 @@ impl<'src> TypeChecker<'src> {
                 type_kind: self
                     .literal_context
                     .last()
-                    .unwrap_or(&TypeKind::I64)
+                    .map(|t| {
+                        if t == &TypeKind::Any {
+                            &TypeKind::Isize
+                        } else {
+                            t
+                        }
+                    })
+                    .unwrap_or(&TypeKind::Isize)
                     .clone(),
             }),
             ExpressionKind::FloatLiteral(value) => Ok(CheckedExpression {
@@ -1382,6 +1398,13 @@ impl<'src> TypeChecker<'src> {
                 type_kind: self
                     .literal_context
                     .last()
+                    .map(|t| {
+                        if t == &TypeKind::Any {
+                            &TypeKind::F64
+                        } else {
+                            t
+                        }
+                    })
                     .unwrap_or(&TypeKind::F64)
                     .clone(),
             }),
@@ -2217,6 +2240,38 @@ impl<'src> TypeChecker<'src> {
                     })
                 }
             }
+            UnaryOp::Neg => {
+                if TypeKind::is_signed(&operand.type_kind) || TypeKind::is_float(&operand.type_kind)
+                {
+                    Ok(CheckedUnaryOp::Neg {
+                        result: operand.type_kind.clone(),
+                    })
+                } else if TypeKind::is_unsigned(&operand.type_kind) {
+                    Err(Diagnostic::with_hint(
+                        format!("cannot apply operator `-` to `{}`", operand.type_kind),
+                        "consider casting to a signed integer first".to_string(),
+                        span,
+                    ))
+                } else {
+                    Err(Diagnostic::new(
+                        format!("cannot apply operator `-` to `{}`", operand.type_kind),
+                        span,
+                    ))
+                }
+            }
+            UnaryOp::Not => {
+                if operand.type_kind == TypeKind::Bool {
+                    Ok(CheckedUnaryOp::Neg {
+                        result: TypeKind::Bool,
+                    })
+                } else {
+                    Err(Diagnostic {
+                        message: format!("cannot apply operator `!` to `{}`", operand.type_kind),
+                        hint: None,
+                        span,
+                    })
+                }
+            }
         }
     }
 
@@ -2358,6 +2413,8 @@ impl<'src> TypeChecker<'src> {
                 "i16" => Ok(TypeKind::I16),
                 "i32" => Ok(TypeKind::I32),
                 "i64" => Ok(TypeKind::I64),
+                "usize" => Ok(TypeKind::Usize),
+                "isize" => Ok(TypeKind::Isize),
                 "f32" => Ok(TypeKind::F32),
                 "f64" => Ok(TypeKind::F64),
                 "String" => {

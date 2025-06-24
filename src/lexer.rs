@@ -11,6 +11,7 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    Bang,
     Ampersand,
     Equals,
     EqualsEquals,
@@ -92,6 +93,7 @@ impl<'src> Lexer<'src> {
                 '*' => Ok(self.make_token(TokenKind::Star, "*".to_owned())),
                 '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
                 '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
+                '!' => Ok(self.make_token(TokenKind::Bang, "!".to_owned())),
                 '&' => Ok(self.make_token(TokenKind::Ampersand, "&".to_owned())),
                 '=' => {
                     self.cursor += 1;

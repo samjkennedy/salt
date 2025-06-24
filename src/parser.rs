@@ -98,7 +98,8 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Mut,
-    // Neg,
+    Neg,
+    Not,
 }
 
 #[derive(Debug, Clone)]
@@ -1105,6 +1106,7 @@ impl<'src> Parser<'src> {
     fn get_unary_precedence(op: UnaryOp) -> i64 {
         match op {
             UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+            UnaryOp::Neg | UnaryOp::Not => 2,
             UnaryOp::Mut => 1,
         }
     }
@@ -1112,6 +1114,8 @@ impl<'src> Parser<'src> {
     fn get_unary_op(kind: TokenKind) -> Option<UnaryOp> {
         match kind {
             TokenKind::MutKeyword => Some(UnaryOp::Mut),
+            TokenKind::Minus => Some(UnaryOp::Neg),
+            TokenKind::Bang => Some(UnaryOp::Not),
             TokenKind::Ampersand => Some(UnaryOp::Ref),
             TokenKind::Star => Some(UnaryOp::Deref),
             _ => None,

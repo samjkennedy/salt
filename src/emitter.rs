@@ -333,6 +333,8 @@ impl Emitter {
             TypeKind::I16 => write!(self.output, "signed short")?,
             TypeKind::I32 => write!(self.output, "signed int")?,
             TypeKind::I64 => write!(self.output, "signed long")?,
+            TypeKind::Usize => write!(self.output, "size_t")?,
+            TypeKind::Isize => write!(self.output, "ptrdiff_t")?,
             TypeKind::F32 => write!(self.output, "float")?,
             TypeKind::F64 => write!(self.output, "double")?,
             // TypeKind::String => write!(self.output, "const char*")?,
@@ -378,6 +380,8 @@ impl Emitter {
             TypeKind::I16 => write!(self.output, "signed short {}", name)?,
             TypeKind::I32 => write!(self.output, "signed int {}", name)?,
             TypeKind::I64 => write!(self.output, "signed long {}", name)?,
+            TypeKind::Usize => write!(self.output, "size_t {}", name)?,
+            TypeKind::Isize => write!(self.output, "ptrdiff_t {}", name)?,
             TypeKind::F32 => write!(self.output, "float {}", name)?,
             TypeKind::F64 => write!(self.output, "double {}", name)?,
             // TypeKind::String => write!(self.output, "const char *{}", name)?,
@@ -457,6 +461,7 @@ impl Emitter {
                 match operator {
                     CheckedUnaryOp::Mut { .. } => {}
                     CheckedUnaryOp::Not { .. } => write!(self.output, "!")?,
+                    CheckedUnaryOp::Neg { .. } => write!(self.output, "-")?,
                     CheckedUnaryOp::Ref { .. } => write!(self.output, " &")?,
                     CheckedUnaryOp::Deref { .. } => write!(self.output, " *")?,
                 }
@@ -697,6 +702,8 @@ impl Emitter {
             TypeKind::I16 => write!(self.output, "\tprintf(\"%hd\", ")?,
             TypeKind::I32 => write!(self.output, "\tprintf(\"%d\", ")?,
             TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\", ")?,
+            TypeKind::Usize => write!(self.output, "\tprintf(\"%lu\", ")?,
+            TypeKind::Isize => write!(self.output, "\tprintf(\"%ld\", ")?,
             TypeKind::F32 => write!(self.output, "\tprintf(\"%f\", ")?,
             TypeKind::F64 => write!(self.output, "\tprintf(\"%lf\", ")?,
             TypeKind::Array { .. } => panic!("cannot print array"),
@@ -754,6 +761,8 @@ impl Emitter {
             TypeKind::I16 => write!(self.output, "\tprintf(\"%hd\\n\", ")?,
             TypeKind::I32 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
             TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
+            TypeKind::Usize => write!(self.output, "\tprintf(\"%lu\\n\", ")?,
+            TypeKind::Isize => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
             TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
             TypeKind::F64 => write!(self.output, "\tprintf(\"%lf\\n\", ")?,
             TypeKind::Array { .. } => panic!("cannot print array"),
@@ -791,6 +800,8 @@ impl Emitter {
         writeln!(self.output, "#include <stdio.h>")?;
         writeln!(self.output, "#include <string.h>")?;
         writeln!(self.output, "#include <stdlib.h>")?;
+        writeln!(self.output, "#include <stdint.h>")?;
+        writeln!(self.output, "#include <stddef.h>")?;
         Ok(())
     }
 }
