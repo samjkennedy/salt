@@ -1,6 +1,4 @@
-add_one(x: u16): u16 {
-    return x + 1;
-}
+add_one(x: u16) => x + 1;
 
 main(): void {
     x: u8 = 255;

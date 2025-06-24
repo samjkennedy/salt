@@ -643,6 +643,12 @@ impl<'src> TypeChecker<'src> {
 
                 Ok(CheckedStatement::Block(checked_statements))
             }
+            StatementKind::ArrowFunctionDefinition {
+                name,
+                parameters,
+                body,
+            } => self.check_arrow_function_definition(name, parameters, body),
+
             StatementKind::FunctionDefinition {
                 return_type,
                 name,
@@ -1027,6 +1033,76 @@ impl<'src> TypeChecker<'src> {
                 })
             }
         }
+    }
+
+    fn check_arrow_function_definition(
+        &mut self,
+        name_token: Token,
+        parameters: Vec<Statement>,
+        body: Expression,
+    ) -> Result<CheckedStatement, Diagnostic> {
+        let name = name_token.text;
+
+        let mut checked_parameters: Vec<CheckedStatement> = Vec::new();
+        let mut params: Vec<FunctionParam> = Vec::new();
+
+        self.scope.push(Scope::new(self.get_return_context()));
+
+        for parameter in &parameters {
+            if let StatementKind::Parameter {
+                name_token,
+                mut_keyword,
+                type_expression,
+            } = &parameter.kind
+            {
+                let type_kind = self.bind_type_kind(type_expression.clone())?;
+                self.try_declare_identifier(
+                    ScopedIdentifier::Variable {
+                        name: name_token.text.clone(),
+                        type_kind: type_kind.clone(),
+                        mutable: mut_keyword.is_some(),
+                    },
+                    parameter.span,
+                )?;
+
+                checked_parameters.push(CheckedStatement::Parameter {
+                    type_kind: type_kind.clone(),
+                    name: name_token.text.clone(),
+                });
+                params.push(FunctionParam {
+                    type_kind,
+                    mutable: mut_keyword.is_some(),
+                });
+            } else {
+                unreachable!()
+            }
+        }
+        let body_span = body.span;
+        let checked_body = self.check_expr(body)?;
+        let return_type = &checked_body.type_kind;
+
+        self.scope.pop();
+
+        self.scope
+            .last_mut()
+            .expect("missing global scope")
+            .try_declare_identifier(
+                ScopedIdentifier::Function {
+                    return_type: return_type.clone(),
+                    name: name.clone(),
+                    params,
+                },
+                body_span,
+            )?;
+
+        Ok(CheckedStatement::FunctionDefinition {
+            return_type: return_type.clone(),
+            name,
+            parameters: checked_parameters,
+            body: Box::new(CheckedStatement::Return {
+                expression: Some(checked_body),
+            }),
+        })
     }
 
     fn check_function_definition(

@@ -11,6 +11,11 @@ pub enum StatementKind {
         parameters: Vec<Statement>,
         body: Box<Statement>,
     },
+    ArrowFunctionDefinition {
+        name: Token,
+        parameters: Vec<Statement>,
+        body: Expression,
+    },
     Parameter {
         name_token: Token,
         mut_keyword: Option<Token>,
@@ -388,11 +393,31 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Identifier(_) if self.context == ParseContext::Global => {
                 let name = self.expect_identifier()?;
+                let name_span = name.span;
 
                 self.expect(&TokenKind::OpenParen)?;
                 let parameters: Vec<Statement> =
                     self.parse_delimited_params(&TokenKind::Comma, &TokenKind::CloseParen)?;
                 self.expect(&TokenKind::CloseParen)?;
+
+                //arrow function
+                if self.peek().kind == TokenKind::FatArrow {
+                    self.expect(&TokenKind::FatArrow)?;
+
+                    self.context = ParseContext::Function;
+                    let expression = self.parse_expression()?;
+                    let semicolon = self.expect(&TokenKind::Semicolon)?;
+                    self.context = ParseContext::Global;
+
+                    return Ok(Statement {
+                        span: Span::from_to(name_span, semicolon.span),
+                        kind: StatementKind::ArrowFunctionDefinition {
+                            name,
+                            parameters,
+                            body: expression,
+                        },
+                    });
+                }
 
                 //TODO: allow void functions to omit the type
                 self.expect(&TokenKind::Colon)?;
@@ -403,7 +428,7 @@ impl<'src> Parser<'src> {
                 self.context = ParseContext::Global;
 
                 Ok(Statement {
-                    span: Span::from_to(return_type.span(), body.span),
+                    span: Span::from_to(name_span, body.span),
                     kind: StatementKind::FunctionDefinition {
                         return_type,
                         name,
