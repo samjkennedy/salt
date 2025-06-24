@@ -414,6 +414,7 @@ impl Emitter {
         match &expr.kind {
             CheckedExpressionKind::BoolLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::IntLiteral(value) => write!(self.output, "{}", value),
+            CheckedExpressionKind::FloatLiteral(value) => write!(self.output, "{}", value),
             CheckedExpressionKind::StringLiteral(value) => {
                 write!(
                     self.output,

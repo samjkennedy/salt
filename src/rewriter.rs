@@ -688,6 +688,7 @@ impl Rewriter {
                 )
             }
             CheckedExpressionKind::IntLiteral(_) => (vec![], expr.clone()),
+            CheckedExpressionKind::FloatLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::BoolLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::StringLiteral(_) => (vec![], expr.clone()),
             CheckedExpressionKind::Parenthesized(expr) => {

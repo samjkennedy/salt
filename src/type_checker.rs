@@ -5,7 +5,7 @@ use crate::parser::{
 };
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     Block(Vec<CheckedStatement>),
@@ -71,7 +71,7 @@ pub enum CheckedStatement {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeKind {
     Any, //Only temp for print for now
     Void,
@@ -277,7 +277,7 @@ impl Display for TypeKind {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckedBinaryOp {
     Add { result: TypeKind },
     Sub { result: TypeKind },
@@ -306,7 +306,7 @@ impl CheckedBinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckedUnaryOp {
     Not { result: TypeKind },
     Mut { result: TypeKind },
@@ -325,7 +325,7 @@ impl CheckedUnaryOp {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CheckedExpression {
     pub kind: CheckedExpressionKind,
     pub type_kind: TypeKind,
@@ -336,6 +336,7 @@ impl CheckedExpression {
         match &self.kind {
             CheckedExpressionKind::BoolLiteral(_) => false,
             CheckedExpressionKind::IntLiteral(_) => false,
+            CheckedExpressionKind::FloatLiteral(_) => false,
             CheckedExpressionKind::StringLiteral(_) => false,
             CheckedExpressionKind::Parenthesized(_) => false,
             CheckedExpressionKind::ArrayLiteral(_) => false,
@@ -369,10 +370,11 @@ impl CheckedExpression {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckedExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
+    FloatLiteral(f64),
     StringLiteral(String),
     Parenthesized(Box<CheckedExpression>),
     ArrayLiteral(Vec<CheckedExpression>),
@@ -438,13 +440,13 @@ pub enum CheckedExpressionKind {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionParam {
     type_kind: TypeKind,
     mutable: bool,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ScopedIdentifier {
     Variable {
         name: String,
@@ -1373,6 +1375,14 @@ impl<'src> TypeChecker<'src> {
                     .literal_context
                     .last()
                     .unwrap_or(&TypeKind::I64)
+                    .clone(),
+            }),
+            ExpressionKind::FloatLiteral(value) => Ok(CheckedExpression {
+                kind: CheckedExpressionKind::FloatLiteral(value),
+                type_kind: self
+                    .literal_context
+                    .last()
+                    .unwrap_or(&TypeKind::F64)
                     .clone(),
             }),
             ExpressionKind::StringLiteral(value) => {

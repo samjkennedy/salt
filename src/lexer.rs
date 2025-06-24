@@ -1,8 +1,9 @@
 use crate::diagnostic::Diagnostic;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     IntLiteral(i64),
+    FloatLiteral(f64),
     Identifier(String),
     StringLiteral(String),
     Plus,
@@ -201,20 +202,41 @@ impl<'src> Lexer<'src> {
 
     fn lex_number(&mut self) -> Token {
         let start = self.cursor;
+        let mut has_dot = false;
 
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.advance();
+            } else if c == '.' && !has_dot {
+                self.advance(); // Consume '.'
+                                // Look ahead to ensure there's a digit after the dot
+                if let Some(next) = self.peek() {
+                    if next.is_ascii_digit() {
+                        has_dot = true;
+                    } else {
+                        break;
+                    }
+                } else {
+                    self.cursor -= 1; //go back an unconsume the '.'
+                    break;
+                }
             } else {
                 break;
             }
         }
 
         let number = &self.input[start..self.cursor];
-        let value = number.parse::<i64>().unwrap();
+
+        let kind = if has_dot {
+            let value = number.parse::<f64>().unwrap();
+            TokenKind::FloatLiteral(value)
+        } else {
+            let value = number.parse::<i64>().unwrap();
+            TokenKind::IntLiteral(value)
+        };
 
         Token {
-            kind: TokenKind::IntLiteral(value),
+            kind,
             span: Span {
                 start,
                 length: number.len(),
