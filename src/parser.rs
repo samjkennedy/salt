@@ -11,6 +11,11 @@ pub enum StatementKind {
         parameters: Vec<Statement>,
         body: Box<Statement>,
     },
+    ArrowFunctionDefinition {
+        name: Token,
+        parameters: Vec<Statement>,
+        body: Expression,
+    },
     Parameter {
         name_token: Token,
         mut_keyword: Option<Token>,
@@ -93,13 +98,15 @@ pub enum UnaryOp {
     Ref,
     Deref,
     Mut,
-    // Neg,
+    Neg,
+    Not,
 }
 
 #[derive(Debug, Clone)]
 pub enum ExpressionKind {
     BoolLiteral(bool),
     IntLiteral(i64),
+    FloatLiteral(f64),
     StringLiteral(String),
     Variable(Token),
     Parenthesized(Box<Expression>),
@@ -153,6 +160,10 @@ pub enum ExpressionKind {
         arms: Vec<Expression>,
         default: Option<Box<Expression>>,
     },
+    Cast {
+        expression: Box<Expression>,
+        type_expression: TypeExpression,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +206,7 @@ impl Expression {
         match &self.kind {
             ExpressionKind::BoolLiteral(_) => false,
             ExpressionKind::IntLiteral(_) => false,
+            ExpressionKind::FloatLiteral(_) => false,
             ExpressionKind::StringLiteral(_) => false,
             ExpressionKind::Variable(_) => true,
             ExpressionKind::Parenthesized(expr) => expr.is_lvalue(),
@@ -218,6 +230,7 @@ impl Expression {
             ExpressionKind::Guard { .. } => false,
             ExpressionKind::MatchArm { .. } => false,
             ExpressionKind::Match { .. } => false,
+            ExpressionKind::Cast { .. } => true,
         }
     }
 }
@@ -383,11 +396,31 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Identifier(_) if self.context == ParseContext::Global => {
                 let name = self.expect_identifier()?;
+                let name_span = name.span;
 
                 self.expect(&TokenKind::OpenParen)?;
                 let parameters: Vec<Statement> =
                     self.parse_delimited_params(&TokenKind::Comma, &TokenKind::CloseParen)?;
                 self.expect(&TokenKind::CloseParen)?;
+
+                //arrow function
+                if self.peek().kind == TokenKind::FatArrow {
+                    self.expect(&TokenKind::FatArrow)?;
+
+                    self.context = ParseContext::Function;
+                    let expression = self.parse_expression()?;
+                    let semicolon = self.expect(&TokenKind::Semicolon)?;
+                    self.context = ParseContext::Global;
+
+                    return Ok(Statement {
+                        span: Span::from_to(name_span, semicolon.span),
+                        kind: StatementKind::ArrowFunctionDefinition {
+                            name,
+                            parameters,
+                            body: expression,
+                        },
+                    });
+                }
 
                 //TODO: allow void functions to omit the type
                 self.expect(&TokenKind::Colon)?;
@@ -398,7 +431,7 @@ impl<'src> Parser<'src> {
                 self.context = ParseContext::Global;
 
                 Ok(Statement {
-                    span: Span::from_to(return_type.span(), body.span),
+                    span: Span::from_to(name_span, body.span),
                     kind: StatementKind::FunctionDefinition {
                         return_type,
                         name,
@@ -802,6 +835,13 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
+            TokenKind::FloatLiteral(value) => {
+                self.next()?;
+                Ok(Expression {
+                    kind: ExpressionKind::FloatLiteral(value),
+                    span: token.span,
+                })
+            }
             TokenKind::StringLiteral(value) => {
                 self.next()?;
                 Ok(Expression {
@@ -950,6 +990,18 @@ impl<'src> Parser<'src> {
                         },
                     }
                 }
+                TokenKind::AsKeyword => {
+                    self.expect(&TokenKind::AsKeyword)?;
+                    let type_expression = self.parse_type_expression()?;
+
+                    Expression {
+                        span: Span::from_to(primary.span, type_expression.span()),
+                        kind: ExpressionKind::Cast {
+                            expression: Box::new(primary),
+                            type_expression,
+                        },
+                    }
+                }
                 TokenKind::ColonColon => {
                     self.expect(&TokenKind::ColonColon)?;
                     let member = self.parse_expression()?;
@@ -1054,6 +1106,7 @@ impl<'src> Parser<'src> {
     fn get_unary_precedence(op: UnaryOp) -> i64 {
         match op {
             UnaryOp::Ref | UnaryOp::Deref => 10, //TODO: this might interact with binary precedence in unexpected ways, tune this
+            UnaryOp::Neg | UnaryOp::Not => 2,
             UnaryOp::Mut => 1,
         }
     }
@@ -1061,6 +1114,8 @@ impl<'src> Parser<'src> {
     fn get_unary_op(kind: TokenKind) -> Option<UnaryOp> {
         match kind {
             TokenKind::MutKeyword => Some(UnaryOp::Mut),
+            TokenKind::Minus => Some(UnaryOp::Neg),
+            TokenKind::Bang => Some(UnaryOp::Not),
             TokenKind::Ampersand => Some(UnaryOp::Ref),
             TokenKind::Star => Some(UnaryOp::Deref),
             _ => None,

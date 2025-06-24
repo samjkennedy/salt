@@ -1,8 +1,9 @@
 use crate::diagnostic::Diagnostic;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     IntLiteral(i64),
+    FloatLiteral(f64),
     Identifier(String),
     StringLiteral(String),
     Plus,
@@ -10,6 +11,7 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    Bang,
     Ampersand,
     Equals,
     EqualsEquals,
@@ -45,6 +47,7 @@ pub enum TokenKind {
     ExternKeyword,
     MatchKeyword,
     FatArrow,
+    AsKeyword,
     EndOfFile,
 }
 
@@ -90,6 +93,7 @@ impl<'src> Lexer<'src> {
                 '*' => Ok(self.make_token(TokenKind::Star, "*".to_owned())),
                 '/' => Ok(self.make_token(TokenKind::Slash, "/".to_owned())),
                 '%' => Ok(self.make_token(TokenKind::Percent, "%".to_owned())),
+                '!' => Ok(self.make_token(TokenKind::Bang, "!".to_owned())),
                 '&' => Ok(self.make_token(TokenKind::Ampersand, "&".to_owned())),
                 '=' => {
                     self.cursor += 1;
@@ -200,20 +204,41 @@ impl<'src> Lexer<'src> {
 
     fn lex_number(&mut self) -> Token {
         let start = self.cursor;
+        let mut has_dot = false;
 
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.advance();
+            } else if c == '.' && !has_dot {
+                self.advance(); // Consume '.'
+                                // Look ahead to ensure there's a digit after the dot
+                if let Some(next) = self.peek() {
+                    if next.is_ascii_digit() {
+                        has_dot = true;
+                    } else {
+                        break;
+                    }
+                } else {
+                    self.cursor -= 1; //go back an unconsume the '.'
+                    break;
+                }
             } else {
                 break;
             }
         }
 
         let number = &self.input[start..self.cursor];
-        let value = number.parse::<i64>().unwrap();
+
+        let kind = if has_dot {
+            let value = number.parse::<f64>().unwrap();
+            TokenKind::FloatLiteral(value)
+        } else {
+            let value = number.parse::<i64>().unwrap();
+            TokenKind::IntLiteral(value)
+        };
 
         Token {
-            kind: TokenKind::IntLiteral(value),
+            kind,
             span: Span {
                 start,
                 length: number.len(),
@@ -343,6 +368,11 @@ impl<'src> Lexer<'src> {
             },
             "match" => Token {
                 kind: TokenKind::MatchKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "as" => Token {
+                kind: TokenKind::AsKeyword,
                 span,
                 text: value.to_owned(),
             },
