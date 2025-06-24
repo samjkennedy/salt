@@ -77,8 +77,16 @@ pub enum TypeKind {
     Void,
     Bool,
     Char,
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
     I64,
     F32,
+    F64,
     // String, TODO save this for CString
     Array {
         size: i64,
@@ -105,6 +113,135 @@ pub enum TypeKind {
     Range,
 }
 
+impl TypeKind {
+    fn is_coerceable_to(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Same type, obviously coerceable
+            (a, b) if a == b => true,
+            //smaller signed -> larger signed integers
+            (a, b)
+                if Self::is_signed(a)
+                    && Self::is_signed(b)
+                    && Self::get_rank(a) < Self::get_rank(b) =>
+            {
+                true
+            }
+            //smaller unsigned -> larger unsigned integers
+            (a, b)
+                if Self::is_unsigned(a)
+                    && Self::is_unsigned(b)
+                    && Self::get_rank(a) < Self::get_rank(b) =>
+            {
+                true
+            }
+            //smaller float -> larger float
+            (a, b)
+                if Self::is_float(a)
+                    && Self::is_float(b)
+                    && Self::get_rank(a) < Self::get_rank(b) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_castable_to(&self, other: &Self) -> bool {
+        use TypeKind::*;
+
+        match (self, other) {
+            // Same type, obviously castable
+            (a, b) if a == b => true,
+
+            // Integer to integer casts (any to any)
+            (a, b) if Self::is_integer(a) && Self::is_integer(b) => true,
+
+            // Integer ↔ Float
+            (a, b) if Self::is_integer(a) && Self::is_float(b) => true,
+            (a, b) if Self::is_float(a) && Self::is_integer(b) => true,
+
+            // Float to float (even narrowing)
+            (a, b) if Self::is_float(a) && Self::is_float(b) => true,
+
+            // Char to integer or back
+            (Char, b) if Self::is_integer(b) => true,
+            (a, Char) if Self::is_integer(a) => true,
+
+            // Pointer casts (disallow cast between any pointer types explicitly)
+            (Pointer { .. }, Pointer { .. }) => false, //TODO review
+
+            // Option<T> to T and vice versa by explicit cast is not allowed
+            (Option { .. }, _) => false,
+            (_, Option { .. }) => false,
+
+            // Disallow casting slices, arrays, structs, enums, ranges etc.
+            (
+                Array { .. }
+                | Slice { .. }
+                | Struct { .. }
+                | Enum { .. }
+                | Range
+                | Void
+                | Bool
+                | Any,
+                _,
+            ) => false,
+            (
+                _,
+                Array { .. }
+                | Slice { .. }
+                | Struct { .. }
+                | Enum { .. }
+                | Range
+                | Void
+                | Bool
+                | Any,
+            ) => false,
+
+            // Fallback
+            _ => false,
+        }
+    }
+
+    fn get_rank(ty: &TypeKind) -> u64 {
+        match ty {
+            TypeKind::Bool => 1,
+            TypeKind::Char => 1,
+            TypeKind::U8 => 1,
+            TypeKind::U16 => 2,
+            TypeKind::U32 => 4,
+            TypeKind::U64 => 8,
+            TypeKind::I8 => 1,
+            TypeKind::I16 => 2,
+            TypeKind::I32 => 4,
+            TypeKind::I64 => 8,
+            TypeKind::F32 => 4,
+            TypeKind::F64 => 8,
+            _ => 0,
+        }
+    }
+
+    fn is_integer(ty: &TypeKind) -> bool {
+        use TypeKind::*;
+        matches!(ty, U8 | U16 | U32 | U64 | I8 | I16 | I32 | I64)
+    }
+
+    fn is_unsigned(ty: &TypeKind) -> bool {
+        use TypeKind::*;
+        matches!(ty, U8 | U16 | U32 | U64)
+    }
+
+    fn is_signed(ty: &TypeKind) -> bool {
+        use TypeKind::*;
+        matches!(ty, I8 | I16 | I32 | I64)
+    }
+
+    fn is_float(ty: &TypeKind) -> bool {
+        use TypeKind::*;
+        matches!(ty, F32 | F64)
+    }
+}
+
 impl Display for TypeKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -112,8 +249,16 @@ impl Display for TypeKind {
             TypeKind::Void => write!(f, "void"),
             TypeKind::Bool => write!(f, "bool"),
             TypeKind::Char => write!(f, "char"),
+            TypeKind::U8 => write!(f, "u8"),
+            TypeKind::U16 => write!(f, "u16"),
+            TypeKind::U32 => write!(f, "u32"),
+            TypeKind::U64 => write!(f, "u64"),
+            TypeKind::I8 => write!(f, "i8"),
+            TypeKind::I16 => write!(f, "i16"),
+            TypeKind::I32 => write!(f, "i32"),
             TypeKind::I64 => write!(f, "i64"),
             TypeKind::F32 => write!(f, "f32"),
+            TypeKind::F64 => write!(f, "f64"),
             TypeKind::Array { size, element_type } => {
                 write!(f, "[{}]{}", size, element_type)
             }
@@ -219,6 +364,7 @@ impl CheckedExpression {
             CheckedExpressionKind::None(_) => false,
             CheckedExpressionKind::MatchArm { .. } => false,
             CheckedExpressionKind::Match { .. } => false,
+            CheckedExpressionKind::Cast { .. } => true,
         }
     }
 }
@@ -285,6 +431,10 @@ pub enum CheckedExpressionKind {
         expression: Box<CheckedExpression>,
         arms: Vec<CheckedExpression>,
         default: Option<Box<CheckedExpression>>,
+    },
+    Cast {
+        expression: Box<CheckedExpression>,
+        type_kind: TypeKind,
     },
 }
 
@@ -417,7 +567,7 @@ impl Module {
 pub struct TypeChecker<'src> {
     parser: &'src mut Parser<'src>,
     scope: Vec<Scope>,
-    //TODO: move this into a Module
+    literal_context: Vec<TypeKind>,
     pub module: Module,
 }
 
@@ -426,6 +576,7 @@ impl<'src> TypeChecker<'src> {
         TypeChecker {
             parser,
             scope: vec![Scope::new(TypeKind::Void)],
+            literal_context: Vec::new(),
             module: Module::new(),
         }
     }
@@ -1100,14 +1251,19 @@ impl<'src> TypeChecker<'src> {
     ) -> Result<CheckedStatement, Diagnostic> {
         let variable_name = name_token.text;
         let initialiser_span = initialiser.span;
-        let checked_initialiser = self.check_expr(initialiser)?;
 
-        let type_kind = if let Some(type_expression) = type_expression {
+        let checked_initialiser = if let Some(type_expression) = type_expression {
             let type_kind = self.bind_type_kind(type_expression)?;
+
+            self.literal_context.push(type_kind.clone());
+            let checked_initialiser = self.check_expr(initialiser)?;
+            self.literal_context.pop();
+
             Self::expect_type(&type_kind, &checked_initialiser.type_kind, initialiser_span)?;
-            type_kind
+
+            checked_initialiser
         } else {
-            checked_initialiser.type_kind.clone()
+            self.check_expr(initialiser)?
         };
 
         self.scope
@@ -1116,14 +1272,14 @@ impl<'src> TypeChecker<'src> {
             .try_declare_identifier(
                 ScopedIdentifier::Variable {
                     name: variable_name.clone(),
-                    type_kind: type_kind.clone(),
+                    type_kind: checked_initialiser.type_kind.clone(),
                     mutable: true, //TODO consts
                 },
                 name_token.span,
             )?;
 
         Ok(CheckedStatement::VariableDeclaration {
-            type_kind,
+            type_kind: checked_initialiser.type_kind.clone(),
             name: variable_name,
             initialiser: Some(checked_initialiser),
         })
@@ -1137,7 +1293,11 @@ impl<'src> TypeChecker<'src> {
             }),
             ExpressionKind::IntLiteral(value) => Ok(CheckedExpression {
                 kind: CheckedExpressionKind::IntLiteral(value),
-                type_kind: TypeKind::I64,
+                type_kind: self
+                    .literal_context
+                    .last()
+                    .unwrap_or(&TypeKind::I64)
+                    .clone(),
             }),
             ExpressionKind::StringLiteral(value) => {
                 let slice_char_type = TypeKind::Slice {
@@ -1211,7 +1371,10 @@ impl<'src> TypeChecker<'src> {
             ExpressionKind::Binary { left, op, right } => {
                 let left_span = left.span;
                 let checked_left = self.check_expr(*left)?;
+
+                self.literal_context.push(checked_left.type_kind.clone());
                 let checked_right = self.check_expr(*right)?;
+                self.literal_context.pop();
 
                 let checked_op = Self::get_binary_op(
                     &op,
@@ -1263,9 +1426,12 @@ impl<'src> TypeChecker<'src> {
 
                             for (i, arg) in arguments.into_iter().enumerate() {
                                 let arg_span = arg.span;
-                                let checked_arg = self.check_expr(arg)?;
-
                                 let param = &params[i];
+
+                                self.literal_context.push(param.type_kind.clone());
+                                let checked_arg = self.check_expr(arg)?;
+                                self.literal_context.pop();
+
                                 Self::expect_type(
                                     &param.type_kind,
                                     &checked_arg.type_kind,
@@ -1770,6 +1936,31 @@ impl<'src> TypeChecker<'src> {
                     type_kind: result_type.unwrap(),
                 })
             }
+            ExpressionKind::Cast {
+                expression,
+                type_expression,
+            } => {
+                let checked_expression = self.check_expr(*expression)?;
+                let type_kind = self.bind_type_kind(type_expression)?;
+
+                if checked_expression.type_kind.is_castable_to(&type_kind) {
+                    Ok(CheckedExpression {
+                        kind: CheckedExpressionKind::Cast {
+                            expression: Box::new(checked_expression),
+                            type_kind: type_kind.clone(),
+                        },
+                        type_kind,
+                    })
+                } else {
+                    Err(Diagnostic::new(
+                        format!(
+                            "cannot cast type `{}` into `{}`",
+                            checked_expression.type_kind, type_kind
+                        ),
+                        expr.span,
+                    ))
+                }
+            }
         }
     }
 
@@ -2025,6 +2216,13 @@ impl<'src> TypeChecker<'src> {
         span: Span,
     ) -> Result<CheckedBinaryOp, Diagnostic> {
         match (left.clone(), right.clone()) {
+            (TypeKind::U8, TypeKind::U8) => Ok(result),
+            (TypeKind::U16, TypeKind::U16) => Ok(result),
+            (TypeKind::U32, TypeKind::U32) => Ok(result),
+            (TypeKind::U64, TypeKind::U64) => Ok(result),
+            (TypeKind::I8, TypeKind::I8) => Ok(result),
+            (TypeKind::I16, TypeKind::I16) => Ok(result),
+            (TypeKind::I32, TypeKind::I32) => Ok(result),
             (TypeKind::I64, TypeKind::I64) => Ok(result),
             (TypeKind::F32, TypeKind::F32) => Ok(result),
             _ => Err(Diagnostic {
@@ -2039,21 +2237,24 @@ impl<'src> TypeChecker<'src> {
     }
 
     fn expect_type(expected: &TypeKind, actual: &TypeKind, span: Span) -> Result<(), Diagnostic> {
-        if expected == &TypeKind::Any {
+        use TypeKind::Any;
+        if expected == &Any {
             return Ok(());
         }
-        //TODO: more sophisticated checking, integer size coersion etc
-        if expected != actual {
-            return Err(Diagnostic {
-                message: format!(
-                    "type mismatch, expected `{}` but got `{}`",
-                    expected, actual
-                ),
-                hint: None,
-                span,
-            });
+        if actual.is_coerceable_to(expected) {
+            return Ok(());
         }
-        Ok(())
+        Err(Diagnostic::with_hint(
+            format!(
+                "type mismatch, expected `{}` but got `{}`",
+                expected, actual
+            ),
+            format!(
+                "use an explicit cast if you intend to convert: `as {}`",
+                expected
+            ),
+            span,
+        ))
     }
 
     fn bind_type_kind(&mut self, type_expression: TypeExpression) -> Result<TypeKind, Diagnostic> {
@@ -2063,8 +2264,16 @@ impl<'src> TypeChecker<'src> {
                 "void" => Ok(TypeKind::Void),
                 "bool" => Ok(TypeKind::Bool),
                 "char" => Ok(TypeKind::Char),
+                "u8" => Ok(TypeKind::U8),
+                "u16" => Ok(TypeKind::U16),
+                "u32" => Ok(TypeKind::U32),
+                "u64" => Ok(TypeKind::U64),
+                "i8" => Ok(TypeKind::I8),
+                "i16" => Ok(TypeKind::I16),
+                "i32" => Ok(TypeKind::I32),
                 "i64" => Ok(TypeKind::I64),
                 "f32" => Ok(TypeKind::F32),
+                "f64" => Ok(TypeKind::F64),
                 "String" => {
                     let slice_char_type = TypeKind::Slice {
                         element_type: Box::new(TypeKind::Char),

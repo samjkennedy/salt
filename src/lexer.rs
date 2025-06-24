@@ -45,6 +45,7 @@ pub enum TokenKind {
     ExternKeyword,
     MatchKeyword,
     FatArrow,
+    AsKeyword,
     EndOfFile,
 }
 
@@ -343,6 +344,11 @@ impl<'src> Lexer<'src> {
             },
             "match" => Token {
                 kind: TokenKind::MatchKeyword,
+                span,
+                text: value.to_owned(),
+            },
+            "as" => Token {
+                kind: TokenKind::AsKeyword,
                 span,
                 text: value.to_owned(),
             },

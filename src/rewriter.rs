@@ -1086,6 +1086,24 @@ impl Rewriter {
 
                 (statements, variable)
             }
+            CheckedExpressionKind::Cast {
+                expression,
+                type_kind,
+            } => {
+                let (prep_stmts, rewritten_expression) =
+                    self.rewrite_expression(expression, return_context);
+
+                (
+                    prep_stmts,
+                    CheckedExpression {
+                        kind: CheckedExpressionKind::Cast {
+                            expression: Box::new(rewritten_expression),
+                            type_kind: type_kind.clone(),
+                        },
+                        type_kind: type_kind.clone(),
+                    },
+                )
+            }
         }
     }
 }

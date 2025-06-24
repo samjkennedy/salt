@@ -325,8 +325,16 @@ impl Emitter {
             TypeKind::Void => write!(self.output, "void")?,
             TypeKind::Bool => write!(self.output, "bool")?,
             TypeKind::Char => write!(self.output, "char")?,
-            TypeKind::I64 => write!(self.output, "long")?,
+            TypeKind::U8 => write!(self.output, "unsigned char")?,
+            TypeKind::U16 => write!(self.output, "unsigned short")?,
+            TypeKind::U32 => write!(self.output, "unsigned int")?,
+            TypeKind::U64 => write!(self.output, "unsigned long")?,
+            TypeKind::I8 => write!(self.output, "signed char")?,
+            TypeKind::I16 => write!(self.output, "signed short")?,
+            TypeKind::I32 => write!(self.output, "signed int")?,
+            TypeKind::I64 => write!(self.output, "signed long")?,
             TypeKind::F32 => write!(self.output, "float")?,
+            TypeKind::F64 => write!(self.output, "double")?,
             // TypeKind::String => write!(self.output, "const char*")?,
             TypeKind::Array {
                 size: _size,
@@ -362,8 +370,16 @@ impl Emitter {
             TypeKind::Void => write!(self.output, "void {}", name)?, //TODO void variables? Remove this
             TypeKind::Bool => write!(self.output, "bool {}", name)?,
             TypeKind::Char => write!(self.output, "char {}", name)?,
-            TypeKind::I64 => write!(self.output, "long {}", name)?,
+            TypeKind::U8 => write!(self.output, "unsigned char {}", name)?,
+            TypeKind::U16 => write!(self.output, "unsigned short {}", name)?,
+            TypeKind::U32 => write!(self.output, "unsigned int {}", name)?,
+            TypeKind::U64 => write!(self.output, "unsigned long {}", name)?,
+            TypeKind::I8 => write!(self.output, "signed char {}", name)?,
+            TypeKind::I16 => write!(self.output, "signed short {}", name)?,
+            TypeKind::I32 => write!(self.output, "signed int {}", name)?,
+            TypeKind::I64 => write!(self.output, "signed long {}", name)?,
             TypeKind::F32 => write!(self.output, "float {}", name)?,
+            TypeKind::F64 => write!(self.output, "double {}", name)?,
             // TypeKind::String => write!(self.output, "const char *{}", name)?,
             TypeKind::Array { size, element_type } => {
                 self.emit_type(element_type)?;
@@ -578,6 +594,15 @@ impl Emitter {
             CheckedExpressionKind::Match { .. } => {
                 unreachable!("should be removed by the rewriting step")
             }
+            CheckedExpressionKind::Cast {
+                expression,
+                type_kind,
+            } => {
+                write!(self.output, "(")?;
+                self.emit_type(type_kind)?;
+                write!(self.output, ") ")?;
+                self.emit_expr(expression)
+            }
         }
     }
 
@@ -663,8 +688,16 @@ impl Emitter {
                 write!(self.output, " ? \"true\" : \"false\")")?;
             }
             TypeKind::Char => write!(self.output, "\tprintf(\"%c\", ")?,
+            TypeKind::U8 => write!(self.output, "\tprintf(\"%u\", ")?,
+            TypeKind::U16 => write!(self.output, "\tprintf(\"%hu\", ")?,
+            TypeKind::U32 => write!(self.output, "\tprintf(\"%u\", ")?,
+            TypeKind::U64 => write!(self.output, "\tprintf(\"%lu\", ")?,
+            TypeKind::I8 => write!(self.output, "\tprintf(\"%hd\", ")?,
+            TypeKind::I16 => write!(self.output, "\tprintf(\"%hd\", ")?,
+            TypeKind::I32 => write!(self.output, "\tprintf(\"%d\", ")?,
             TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\", ")?,
             TypeKind::F32 => write!(self.output, "\tprintf(\"%f\", ")?,
+            TypeKind::F64 => write!(self.output, "\tprintf(\"%lf\", ")?,
             TypeKind::Array { .. } => panic!("cannot print array"),
             TypeKind::Slice { element_type } => {
                 if **element_type == TypeKind::Char {
@@ -712,8 +745,16 @@ impl Emitter {
                 write!(self.output, " ? \"true\" : \"false\")")?;
             }
             TypeKind::Char => write!(self.output, "\tprintf(\"%c\\n\", ")?,
+            TypeKind::U8 => write!(self.output, "\tprintf(\"%u\\n\", ")?,
+            TypeKind::U16 => write!(self.output, "\tprintf(\"%hu\\n\", ")?,
+            TypeKind::U32 => write!(self.output, "\tprintf(\"%u\\n\", ")?,
+            TypeKind::U64 => write!(self.output, "\tprintf(\"%lu\\n\", ")?,
+            TypeKind::I8 => write!(self.output, "\tprintf(\"%hd\\n\", ")?,
+            TypeKind::I16 => write!(self.output, "\tprintf(\"%hd\\n\", ")?,
+            TypeKind::I32 => write!(self.output, "\tprintf(\"%d\\n\", ")?,
             TypeKind::I64 => write!(self.output, "\tprintf(\"%ld\\n\", ")?,
             TypeKind::F32 => write!(self.output, "\tprintf(\"%f\\n\", ")?,
+            TypeKind::F64 => write!(self.output, "\tprintf(\"%lf\\n\", ")?,
             TypeKind::Array { .. } => panic!("cannot print array"),
             TypeKind::Slice { element_type } => {
                 if **element_type == TypeKind::Char {

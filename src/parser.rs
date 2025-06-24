@@ -153,6 +153,10 @@ pub enum ExpressionKind {
         arms: Vec<Expression>,
         default: Option<Box<Expression>>,
     },
+    Cast {
+        expression: Box<Expression>,
+        type_expression: TypeExpression,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +222,7 @@ impl Expression {
             ExpressionKind::Guard { .. } => false,
             ExpressionKind::MatchArm { .. } => false,
             ExpressionKind::Match { .. } => false,
+            ExpressionKind::Cast { .. } => true,
         }
     }
 }
@@ -947,6 +952,18 @@ impl<'src> Parser<'src> {
                         kind: ExpressionKind::Range {
                             lower: Box::new(primary),
                             upper: Box::new(upper),
+                        },
+                    }
+                }
+                TokenKind::AsKeyword => {
+                    self.expect(&TokenKind::AsKeyword)?;
+                    let type_expression = self.parse_type_expression()?;
+
+                    Expression {
+                        span: Span::from_to(primary.span, type_expression.span()),
+                        kind: ExpressionKind::Cast {
+                            expression: Box::new(primary),
+                            type_expression,
                         },
                     }
                 }
